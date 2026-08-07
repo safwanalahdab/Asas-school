@@ -9,7 +9,6 @@ from pathlib import Path
 
 import environ
 
-
 # =========================================================
 # Base directory and environment variables
 # =========================================================
@@ -39,10 +38,14 @@ DEBUG = env(
 
 ALLOWED_HOSTS = env.list(
     "ALLOWED_HOSTS",
-    default=[
-        "127.0.0.1",
-        "localhost",
-    ] if DEBUG else [],
+    default=(
+        [
+            "127.0.0.1",
+            "localhost",
+        ]
+        if DEBUG
+        else []
+    ),
 )
 
 
@@ -58,14 +61,12 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-
     # Third-party applications
     "rest_framework",
     "django_filters",
     "drf_spectacular",
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
-
     # Project applications
     "accounts",
 ]
@@ -77,21 +78,15 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    
     "whitenoise.middleware.WhiteNoiseMiddleware",
-    
     # يجب أن يكون قبل CommonMiddleware.
     "corsheaders.middleware.CorsMiddleware",
-
     # مطلوب لـ Django Admin.
     "django.contrib.sessions.middleware.SessionMiddleware",
-
     "django.middleware.common.CommonMiddleware",
-
     # مطلوب لحماية Django Admin،
     # ونستخدم فحصه يدوياً مع JWT Cookies.
     "django.middleware.csrf.CsrfViewMiddleware",
-
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -108,26 +103,14 @@ ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [
     {
-        "BACKEND": (
-            "django.template.backends.django."
-            "DjangoTemplates"
-        ),
+        "BACKEND": ("django.template.backends.django." "DjangoTemplates"),
         "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
-                (
-                    "django.template.context_processors."
-                    "request"
-                ),
-                (
-                    "django.contrib.auth.context_processors."
-                    "auth"
-                ),
-                (
-                    "django.contrib.messages.context_processors."
-                    "messages"
-                ),
+                ("django.template.context_processors." "request"),
+                ("django.contrib.auth.context_processors." "auth"),
+                ("django.contrib.messages.context_processors." "messages"),
             ],
         },
     },
@@ -160,6 +143,12 @@ DATABASES = {
             "DB_PORT",
             default=5432,
         ),
+        "OPTIONS": {
+            "sslmode": env(
+                "DB_SSLMODE",
+                default="disable" if DEBUG else "require",
+            ),
+        },
     }
 }
 
@@ -176,22 +165,13 @@ AUTH_PASSWORD_VALIDATORS = [
         ),
     },
     {
-        "NAME": (
-            "django.contrib.auth.password_validation."
-            "MinimumLengthValidator"
-        ),
+        "NAME": ("django.contrib.auth.password_validation." "MinimumLengthValidator"),
     },
     {
-        "NAME": (
-            "django.contrib.auth.password_validation."
-            "CommonPasswordValidator"
-        ),
+        "NAME": ("django.contrib.auth.password_validation." "CommonPasswordValidator"),
     },
     {
-        "NAME": (
-            "django.contrib.auth.password_validation."
-            "NumericPasswordValidator"
-        ),
+        "NAME": ("django.contrib.auth.password_validation." "NumericPasswordValidator"),
     },
 ]
 
@@ -231,7 +211,6 @@ AUTH_USER_MODEL = "accounts.User"
 
 REST_FRAMEWORK = {
     "EXCEPTION_HANDLER": "accounts.exceptions.api_exception_handler",
-
     # مصادقة الـAPI تعتمد على JWT.
     #
     # هذا الكلاس المخصص:
@@ -241,30 +220,20 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "accounts.authentication.CookieJWTAuthentication",
     ],
-
     # جميع الـEndpoints محمية افتراضياً.
     # Login وCSRF وRefresh نضع لها AllowAny.
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
         "accounts.permissions.PasswordChangeGate",
     ],
-
-    "DEFAULT_SCHEMA_CLASS": (
-        "drf_spectacular.openapi.AutoSchema"
-    ),
-
+    "DEFAULT_SCHEMA_CLASS": ("drf_spectacular.openapi.AutoSchema"),
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ],
-
-    "DEFAULT_PAGINATION_CLASS": (
-        "rest_framework.pagination.PageNumberPagination"
-    ),
-
+    "DEFAULT_PAGINATION_CLASS": ("rest_framework.pagination.PageNumberPagination"),
     "PAGE_SIZE": 20,
-
     # معدل محاولات تسجيل الدخول.
     "DEFAULT_THROTTLE_RATES": {
         "web_login": "5/minute",
@@ -281,28 +250,18 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
         minutes=15,
     ),
-
     # Refresh Token صالح لمدة 7 أيام.
     "REFRESH_TOKEN_LIFETIME": timedelta(
         days=7,
     ),
-
     # إصدار Refresh Token جديد عند كل Refresh.
     "ROTATE_REFRESH_TOKENS": True,
-
     # تعطيل Refresh Token القديم بعد تدويره.
     "BLACKLIST_AFTER_ROTATION": True,
-
     "UPDATE_LAST_LOGIN": False,
-
-    "AUTH_HEADER_TYPES": (
-        "Bearer",
-    ),
-
+    "AUTH_HEADER_TYPES": ("Bearer",),
     "USER_ID_FIELD": "id",
-
     "USER_ID_CLAIM": "user_id",
-
     # مفتاح مستقل لتوقيع JWT.
     "SIGNING_KEY": env(
         "JWT_SIGNING_KEY",
@@ -357,10 +316,14 @@ JWT_REFRESH_COOKIE_PATH = "/api/v1/auth/web/"
 
 FRONTEND_ORIGINS = env.list(
     "FRONTEND_ORIGINS",
-    default=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-    ] if DEBUG else [],
+    default=(
+        [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ]
+        if DEBUG
+        else []
+    ),
 )
 
 # المصادر المسموح لها بالاتصال بالـAPI من المتصفح.
@@ -425,14 +388,8 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "Asas School Academic API",
-
-    "DESCRIPTION": (
-        "واجهة برمجة تطبيقات منصة مدرسة أساس الأكاديمية"
-    ),
-
+    "DESCRIPTION": ("واجهة برمجة تطبيقات منصة مدرسة أساس الأكاديمية"),
     "VERSION": "1.0.0",
-
     "SERVE_INCLUDE_SCHEMA": False,
-
     "COMPONENT_SPLIT_REQUEST": True,
 }
