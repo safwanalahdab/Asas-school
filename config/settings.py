@@ -77,7 +77,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-
+    
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    
     # يجب أن يكون قبل CommonMiddleware.
     "corsheaders.middleware.CorsMiddleware",
 
@@ -95,6 +97,8 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # =========================================================
 # URLs, Templates and WSGI
