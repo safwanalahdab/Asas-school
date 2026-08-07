@@ -1,0 +1,36 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Virtual environments
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Local database
+db.sqlite3
+db.sqlite3-journal
+
+# IDE
+.idea/
+.vscode/
+
+# User uploaded files
+media/
+
+# Django collected static files
+staticfiles/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Testing / coverage
+.coverage
+htmlcov/
+.pytest_cache/
