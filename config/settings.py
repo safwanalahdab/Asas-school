@@ -117,7 +117,9 @@ INSTALLED_APPS = [
     "corsheaders",
     # Project applications
     "accounts",
-    "academics" ,
+    "academics",
+    "teaching",
+
     
 ]
 

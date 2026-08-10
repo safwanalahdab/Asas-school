@@ -49,4 +49,8 @@ urlpatterns = [
         "api/v1/academics/",
         include("academics.urls"),
     ),
+    path(
+        "api/v1/teaching/",
+        include("teaching.urls"),
+    ),
 ]
