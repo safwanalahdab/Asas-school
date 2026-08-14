@@ -15,6 +15,10 @@ from rest_framework.exceptions import (
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from config.api_responses import ArabicApiResponseMixin
+from audit_logs.models import AuditLog
+from audit_logs.services import changed_fields, log_event, safe_snapshot
+from django.db import transaction
 
 from accounts.authentication import (
     CookieJWTAuthentication,
@@ -56,7 +60,7 @@ User = get_user_model()
     ensure_csrf_cookie,
     name="dispatch",
 )
-class WebCsrfView(APIView):
+class WebCsrfView(ArabicApiResponseMixin, APIView):
     """
     يرجع CSRF Token للواجهة ويضمن إنشاء CSRF Cookie.
 
@@ -84,7 +88,7 @@ class WebCsrfView(APIView):
         )
 
 
-class WebLoginView(APIView):
+class WebLoginView(ArabicApiResponseMixin, APIView):
     """
     يسجل دخول مستخدم لوحة الويب.
 
@@ -147,7 +151,7 @@ class WebLoginView(APIView):
         return response
 
 
-class WebTokenRefreshView(APIView):
+class WebTokenRefreshView(ArabicApiResponseMixin, APIView):
     """
     يجدد جلسة لوحة الويب.
 
@@ -221,7 +225,7 @@ class WebTokenRefreshView(APIView):
         return response
 
 
-class WebLogoutView(APIView):
+class WebLogoutView(ArabicApiResponseMixin, APIView):
     """
     يسجل خروج مستخدم لوحة الويب.
 
@@ -274,7 +278,7 @@ class WebLogoutView(APIView):
         return response
 
 
-class WebMeView(APIView):
+class WebMeView(ArabicApiResponseMixin, APIView):
     """
     يرجع بيانات المستخدم الحالي اعتماداً
     على Access Token الموجود داخل Cookie.
@@ -331,7 +335,7 @@ class WebMeView(APIView):
         )
 
 
-class WebChangePasswordView(APIView):
+class WebChangePasswordView(ArabicApiResponseMixin, APIView):
     allow_password_change_required = True
     permission_classes = [IsAuthenticated, IsWebDashboardUser]
 
@@ -375,6 +379,7 @@ class WebChangePasswordView(APIView):
 
 
 class UserViewSet(
+    ArabicApiResponseMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.CreateModelMixin,
@@ -470,10 +475,12 @@ class UserViewSet(
             }
         )
 
+    @transaction.atomic
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        log_event(actor=request.user, action=AuditLog.Action.CREATE, instance=user, changes={"created_record": safe_snapshot(user)})
         return Response(
             {
                 "code": "USER_CREATED",
@@ -483,11 +490,14 @@ class UserViewSet(
             status=status.HTTP_201_CREATED,
         )
 
+    @transaction.atomic
     def partial_update(self, request, *args, **kwargs):
         user = self.get_object()
         serializer = self.get_serializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
+        changes = changed_fields(user, serializer.validated_data)
         serializer.save()
+        log_event(actor=request.user, action=AuditLog.Action.UPDATE, instance=user, changes=changes)
         return Response(
             {
                 "code": "USER_UPDATED",
@@ -510,7 +520,7 @@ class UserViewSet(
             )
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user, changed = set_account_active(user, serializer.validated_data["is_active"])
+        user, changed = set_account_active(user, serializer.validated_data["is_active"], actor=request.user)
         return Response(
             {
                 "code": "USER_ACTIVE_STATUS_UPDATED" if changed else "USER_ACTIVE_STATUS_UNCHANGED",
@@ -531,7 +541,7 @@ class UserViewSet(
             raise PermissionDenied(
                 {"code": "PASSWORD_RESET_FORBIDDEN", "detail": "ليس لديك صلاحية لإعادة تعيين كلمة مرور هذا الحساب."}
             )
-        _, password = reset_account_password(user)
+        _, password = reset_account_password(user, actor=request.user)
         return Response(
             {
                 "code": "PASSWORD_RESET",

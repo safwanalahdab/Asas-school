@@ -25,6 +25,8 @@ class TeachingAssignmentPermission(BasePermission):
                 "retrieve",
                 "create",
                 "partial_update",
+                "destroy",
+                "reopen",
                 "end",
             }
 

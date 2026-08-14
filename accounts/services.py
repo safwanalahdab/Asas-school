@@ -4,6 +4,8 @@ from datetime import timedelta
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
+from audit_logs.models import AuditLog
+from audit_logs.services import log_event
 
 
 TEMPORARY_PASSWORD_TTL = timedelta(hours=72)
@@ -38,7 +40,7 @@ def increment_token_version(user):
 
 
 @transaction.atomic
-def set_account_active(user, is_active):
+def set_account_active(user, is_active, *, actor=None):
     locked_user = type(user).objects.select_for_update().get(pk=user.pk)
     if locked_user.is_active == is_active:
         return locked_user, False
@@ -47,11 +49,18 @@ def set_account_active(user, is_active):
     locked_user.save(update_fields=["is_active"])
     if not is_active:
         increment_token_version(locked_user)
+    if actor is not None:
+        log_event(
+            actor=actor,
+            action=(AuditLog.Action.ACTIVATE if is_active else AuditLog.Action.DEACTIVATE),
+            instance=locked_user,
+            changes={"is_active": {"before": not is_active, "after": is_active}},
+        )
     return locked_user, True
 
 
 @transaction.atomic
-def reset_account_password(user):
+def reset_account_password(user, *, actor=None):
     locked_user = type(user).objects.select_for_update().get(pk=user.pk)
     password = assign_temporary_password(locked_user)
     locked_user.save(
@@ -62,4 +71,10 @@ def reset_account_password(user):
         ]
     )
     increment_token_version(locked_user)
+    if actor is not None:
+        log_event(
+            actor=actor, action=AuditLog.Action.RESET_PASSWORD,
+            instance=locked_user,
+            changes={"event": "تمت إعادة تعيين كلمة مرور المستخدم."},
+        )
     return locked_user, password

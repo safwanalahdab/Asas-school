@@ -160,7 +160,13 @@ class WebLoginResponseSerializer(serializers.Serializer):
     يوضعان داخل HttpOnly Cookies.
     """
 
-    user = UserSummarySerializer()
+    class LoginDataSerializer(serializers.Serializer):
+        user = UserSummarySerializer()
+
+    success = serializers.BooleanField(default=True)
+    code = serializers.CharField(default="LOGIN_SUCCESS")
+    message = serializers.CharField(default="تم تسجيل الدخول بنجاح.")
+    data = LoginDataSerializer()
 
 
 class WebTokenRefreshSerializer(TokenRefreshSerializer):
@@ -254,8 +260,10 @@ class MessageResponseSerializer(serializers.Serializer):
     مثل Refresh وLogout.
     """
 
+    success = serializers.BooleanField(default=True)
     code = serializers.CharField()
-    detail = serializers.CharField()
+    message = serializers.CharField()
+    data = serializers.JSONField(required=False, allow_null=True)
 
 
 class CsrfTokenResponseSerializer(serializers.Serializer):
@@ -263,9 +271,13 @@ class CsrfTokenResponseSerializer(serializers.Serializer):
     شكل استجابة Endpoint الخاص بالحصول على CSRF Token.
     """
 
-    code = serializers.CharField()
-    detail = serializers.CharField()
-    csrf_token = serializers.CharField()
+    class CsrfDataSerializer(serializers.Serializer):
+        csrf_token = serializers.CharField()
+
+    success = serializers.BooleanField(default=True)
+    code = serializers.CharField(default="CSRF_TOKEN_RETRIEVED")
+    message = serializers.CharField()
+    data = CsrfDataSerializer()
 
 
 class WebLogoutSerializer(serializers.Serializer):
@@ -406,9 +418,13 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
 
 class ResetPasswordResponseSerializer(serializers.Serializer):
-    code = serializers.CharField()
-    detail = serializers.CharField()
-    temporary_password = serializers.CharField()
+    class ResetPasswordDataSerializer(serializers.Serializer):
+        temporary_password = serializers.CharField()
+
+    success = serializers.BooleanField(default=True)
+    code = serializers.CharField(default="PASSWORD_RESET")
+    message = serializers.CharField()
+    data = ResetPasswordDataSerializer()
 
 
 class UserListSerializer(serializers.ModelSerializer):

@@ -1,6 +1,8 @@
 from django.db.models.deletion import ProtectedError
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
+from config.api_responses import ArabicApiResponseMixin
+from audit_logs.mixins import AuditModelViewSetMixin
 
 from .permissions import AcademicManagementPermission
 
@@ -35,7 +37,14 @@ ACADEMIC_HTTP_METHODS = (
 )
 
 
-class AcademicYearViewSet(viewsets.ModelViewSet):
+class AcademicYearViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("ACADEMIC_YEARS_RETRIEVED", "تم جلب قائمة السنوات الدراسية بنجاح."),
+        "retrieve": ("ACADEMIC_YEAR_RETRIEVED", "تم جلب السنة الدراسية بنجاح."),
+        "create": ("ACADEMIC_YEAR_CREATED", "تمت إضافة السنة الدراسية بنجاح."),
+        "partial_update": ("ACADEMIC_YEAR_UPDATED", "تم تحديث السنة الدراسية بنجاح."),
+        "destroy": ("ACADEMIC_YEAR_DELETED", "تم حذف السنة الدراسية بنجاح."),
+    }
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
     permission_classes = [
@@ -65,25 +74,28 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         academic_year = self.get_object()
 
-        if academic_year.status != AcademicYear.Status.DRAFT:
-            raise ValidationError(
-                {"detail": ("لا يمكن حذف السنة الدراسية " "بعد تفعيلها أو إغلاقها.")}
-            )
-
         try:
             return super().destroy(request, *args, **kwargs)
 
         except ProtectedError:
             raise ValidationError(
                 {
+                    "code": "ACADEMIC_YEAR_DELETE_BLOCKED",
                     "detail": (
-                        "لا يمكن حذف السنة الدراسية لأنها " "مرتبطة ببيانات أكاديمية."
+                        "لا يمكن حذف السنة الدراسية لوجود فصول أو شعب أو تسجيلات أو بيانات أكاديمية مرتبطة بها."
                     )
                 }
             )
 
 
-class TermViewSet(viewsets.ModelViewSet):
+class TermViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("TERMS_RETRIEVED", "تم جلب قائمة الفصول الدراسية بنجاح."),
+        "retrieve": ("TERM_RETRIEVED", "تم جلب الفصل الدراسي بنجاح."),
+        "create": ("TERM_CREATED", "تمت إضافة الفصل الدراسي بنجاح."),
+        "partial_update": ("TERM_UPDATED", "تم تحديث الفصل الدراسي بنجاح."),
+        "destroy": ("TERM_DELETED", "تم حذف الفصل الدراسي بنجاح."),
+    }
     queryset = Term.objects.select_related(
         "academic_year",
     ).all()
@@ -119,16 +131,6 @@ class TermViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         term = self.get_object()
 
-        if term.status != Term.Status.DRAFT:
-            raise ValidationError(
-                {"detail": ("لا يمكن حذف الفصل الدراسي " "بعد تفعيله أو إغلاقه.")}
-            )
-
-        if term.academic_year.status != AcademicYear.Status.DRAFT:
-            raise ValidationError(
-                {"detail": ("لا يمكن حذف فصل تابع لسنة " "دراسية مفعلة أو مغلقة.")}
-            )
-
         try:
             return super().destroy(
                 request,
@@ -139,6 +141,7 @@ class TermViewSet(viewsets.ModelViewSet):
         except ProtectedError:
             raise ValidationError(
                 {
+                    "code": "TERM_DELETE_BLOCKED",
                     "detail": (
                         "لا يمكن حذف الفصل الدراسي لأنه " "مرتبط ببيانات أكاديمية."
                     )
@@ -146,7 +149,14 @@ class TermViewSet(viewsets.ModelViewSet):
             )
 
 
-class GradeLevelViewSet(viewsets.ModelViewSet):
+class GradeLevelViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("GRADE_LEVELS_RETRIEVED", "تم جلب قائمة الصفوف الدراسية بنجاح."),
+        "retrieve": ("GRADE_LEVEL_RETRIEVED", "تم جلب الصف الدراسي بنجاح."),
+        "create": ("GRADE_LEVEL_CREATED", "تمت إضافة الصف الدراسي بنجاح."),
+        "partial_update": ("GRADE_LEVEL_UPDATED", "تم تحديث الصف الدراسي بنجاح."),
+        "destroy": ("GRADE_LEVEL_DELETED", "تم حذف الصف الدراسي بنجاح."),
+    }
     queryset = GradeLevel.objects.all()
 
     serializer_class = GradeLevelSerializer
@@ -191,11 +201,18 @@ class GradeLevelViewSet(viewsets.ModelViewSet):
 
         except ProtectedError:
             raise ValidationError(
-                {"detail": ("لا يمكن حذف الصف لأنه مرتبط " "ببيانات أكاديمية.")}
+                {"code": "GRADE_LEVEL_DELETE_BLOCKED", "detail": "لا يمكن حذف الصف لوجود شعب أو خطط أو بيانات دراسية مرتبطة به."}
             )
 
 
-class SectionViewSet(viewsets.ModelViewSet):
+class SectionViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("SECTIONS_RETRIEVED", "تم جلب قائمة الشعب بنجاح."),
+        "retrieve": ("SECTION_RETRIEVED", "تم جلب الشعبة بنجاح."),
+        "create": ("SECTION_CREATED", "تمت إضافة الشعبة بنجاح."),
+        "partial_update": ("SECTION_UPDATED", "تم تحديث الشعبة بنجاح."),
+        "destroy": ("SECTION_DELETED", "تم حذف الشعبة بنجاح."),
+    }
     queryset = Section.objects.select_related(
         "academic_year",
         "grade_level",
@@ -236,11 +253,6 @@ class SectionViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         section = self.get_object()
 
-        if section.academic_year.status == AcademicYear.Status.CLOSED:
-            raise ValidationError(
-                {"detail": ("لا يمكن حذف شعبة تابعة " "لسنة دراسية مغلقة.")}
-            )
-
         try:
             return super().destroy(
                 request,
@@ -250,11 +262,18 @@ class SectionViewSet(viewsets.ModelViewSet):
 
         except ProtectedError:
             raise ValidationError(
-                {"detail": ("لا يمكن حذف الشعبة لأنها " "مرتبطة ببيانات أكاديمية.")}
+                {"code": "SECTION_DELETE_BLOCKED", "detail": "لا يمكن حذف الشعبة لأنها تحتوي على طلاب أو تكليفات تعليمية مرتبطة بها."}
             )
 
 
-class SubjectViewSet(viewsets.ModelViewSet):
+class SubjectViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("SUBJECTS_RETRIEVED", "تم جلب قائمة المواد بنجاح."),
+        "retrieve": ("SUBJECT_RETRIEVED", "تم جلب المادة بنجاح."),
+        "create": ("SUBJECT_CREATED", "تمت إضافة المادة بنجاح."),
+        "partial_update": ("SUBJECT_UPDATED", "تم تحديث المادة بنجاح."),
+        "destroy": ("SUBJECT_DELETED", "تم حذف المادة بنجاح."),
+    }
     queryset = Subject.objects.all()
     serializer_class = SubjectSerializer
     permission_classes = [
@@ -296,6 +315,7 @@ class SubjectViewSet(viewsets.ModelViewSet):
         except ProtectedError:
             raise ValidationError(
                 {
+                    "code": "SUBJECT_DELETE_BLOCKED",
                     "detail": (
                         "لا يمكن حذف المادة لأنها "
                         "مرتبطة بخطة دراسية أو بيانات أكاديمية."
@@ -304,7 +324,14 @@ class SubjectViewSet(viewsets.ModelViewSet):
             )
 
 
-class GradeSubjectViewSet(viewsets.ModelViewSet):
+class GradeSubjectViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("GRADE_SUBJECTS_RETRIEVED", "تم جلب الخطة الدراسية بنجاح."),
+        "retrieve": ("GRADE_SUBJECT_RETRIEVED", "تم جلب مادة الخطة الدراسية بنجاح."),
+        "create": ("GRADE_SUBJECT_CREATED", "تمت إضافة المادة إلى الخطة الدراسية بنجاح."),
+        "partial_update": ("GRADE_SUBJECT_UPDATED", "تم تحديث مادة الخطة الدراسية بنجاح."),
+        "destroy": ("GRADE_SUBJECT_DELETED", "تم حذف المادة من الخطة الدراسية بنجاح."),
+    }
     queryset = GradeSubject.objects.select_related(
         "academic_year",
         "grade_level",
@@ -346,11 +373,6 @@ class GradeSubjectViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         grade_subject = self.get_object()
 
-        if grade_subject.academic_year.status == AcademicYear.Status.CLOSED:
-            raise ValidationError(
-                {"detail": ("لا يمكن حذف مادة من خطة " "سنة دراسية مغلقة.")}
-            )
-
         try:
             return super().destroy(
                 request,
@@ -361,6 +383,7 @@ class GradeSubjectViewSet(viewsets.ModelViewSet):
         except ProtectedError:
             raise ValidationError(
                 {
+                    "code": "GRADE_SUBJECT_DELETE_BLOCKED",
                     "detail": (
                         "لا يمكن حذف المادة من الخطة " "لأنها مرتبطة ببيانات أكاديمية."
                     )

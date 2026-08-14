@@ -3,6 +3,11 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from config.api_responses import ArabicApiResponseMixin
+from audit_logs.mixins import AuditModelViewSetMixin
+from audit_logs.models import AuditLog
+from audit_logs.services import log_event
+from django.db import transaction
 
 from accounts.models import User
 from accounts.permissions import IsWebDashboardUser
@@ -16,7 +21,19 @@ from .permissions import TeachingAssignmentPermission
 from .serializers import TeacherAssignmentSerializer
 
 
-class TeacherAssignmentViewSet(viewsets.ModelViewSet):
+class TeacherAssignmentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+    response_messages = {
+        "list": ("TEACHER_ASSIGNMENTS_RETRIEVED", "تم جلب قائمة تكليفات المعلمين بنجاح."),
+        "retrieve": ("TEACHER_ASSIGNMENT_RETRIEVED", "تم جلب تكليف المعلم بنجاح."),
+        "create": ("TEACHER_ASSIGNMENT_CREATED", "تم إنشاء تكليف المعلم بنجاح."),
+        "partial_update": ("TEACHER_ASSIGNMENT_UPDATED", "تم تحديث تكليف المعلم بنجاح."),
+        "end": ("TEACHER_ASSIGNMENT_ENDED", "تم إنهاء تكليف المعلّم بنجاح."),
+        "reopen": ("TEACHER_ASSIGNMENT_REOPENED", "تمت إعادة فتح تكليف المعلّم بنجاح."),
+        "destroy": (
+            "TEACHER_ASSIGNMENT_DELETED",
+            "تم حذف تكليف المعلّم بنجاح.",
+        ),
+    }
     serializer_class = TeacherAssignmentSerializer
 
     permission_classes = [
@@ -59,6 +76,7 @@ class TeacherAssignmentViewSet(viewsets.ModelViewSet):
         "patch",
         "head",
         "options",
+        "delete",
     ]
 
     queryset = TeacherAssignment.objects.select_related(
@@ -95,6 +113,8 @@ class TeacherAssignmentViewSet(viewsets.ModelViewSet):
         if assignment.end_date is not None:
             raise ValidationError(
                 {
+                    "code": "TEACHER_ASSIGNMENT_ALREADY_ENDED",
+                    "detail": "تعذّر إنهاء التكليف، لأنه منتهٍ بالفعل.",
                     "end_date": ("هذا التكليف منتهٍ بالفعل."),
                 }
             )
@@ -120,13 +140,28 @@ class TeacherAssignmentViewSet(viewsets.ModelViewSet):
             raise_exception=True,
         )
 
-        serializer.save()
+        with transaction.atomic():
+            serializer.save()
+            log_event(actor=request.user, action=AuditLog.Action.END, instance=assignment, changes={"end_date": {"before": None, "after": serializer.validated_data["end_date"]}})
 
         return Response(
             {
-                "code": "teacher_assignment_ended",
+                "code": "TEACHER_ASSIGNMENT_ENDED",
                 "detail": "تم إنهاء تكليف المعلّم بنجاح.",
                 "data": serializer.data,
             },
             status=status.HTTP_200_OK,
         )
+
+    @action(detail=True, methods=["post"], url_path="reopen")
+    def reopen(self, request, pk=None):
+        assignment = self.get_object()
+        if assignment.end_date is None:
+            raise ValidationError({"code": "TEACHER_ASSIGNMENT_ALREADY_ACTIVE", "detail": "تعذّرت إعادة فتح التكليف، لأنه فعال بالفعل.", "end_date": "التكليف غير منتهٍ."})
+        serializer = self.get_serializer(assignment, data={"end_date": None}, partial=True)
+        serializer.is_valid(raise_exception=True)
+        previous_end_date = assignment.end_date
+        with transaction.atomic():
+            serializer.save()
+            log_event(actor=request.user, action=AuditLog.Action.REOPEN, instance=assignment, changes={"end_date": {"before": previous_end_date, "after": None}})
+        return Response({"code": "TEACHER_ASSIGNMENT_REOPENED", "detail": "تمت إعادة فتح تكليف المعلّم بنجاح.", "data": serializer.data}, status=status.HTTP_200_OK)

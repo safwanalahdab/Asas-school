@@ -60,6 +60,16 @@ class AcademicYearSerializer(serializers.ModelSerializer):
                 }
             )
 
+        if self.instance is not None and start_date and end_date:
+            if self.instance.terms.filter(start_date__lt=start_date).exists():
+                raise serializers.ValidationError(
+                    {"start_date": "لا يمكن جعل بداية السنة بعد بداية فصل دراسي مرتبط بها."}
+                )
+            if self.instance.terms.filter(end_date__gt=end_date).exists():
+                raise serializers.ValidationError(
+                    {"end_date": "لا يمكن جعل نهاية السنة قبل نهاية فصل دراسي مرتبط بها."}
+                )
+
         return attrs
 
 
@@ -216,6 +226,23 @@ class SectionSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+    def validate(self, attrs):
+        if self.instance is not None and (
+            "academic_year" in attrs or "grade_level" in attrs
+        ):
+            used = (
+                self.instance.student_enrollments.exists()
+                or self.instance.teacher_assignments.exists()
+            )
+            if used:
+                errors = {}
+                if "academic_year" in attrs:
+                    errors["academic_year"] = "لا يمكن تغيير سنة شعبة تحتوي على تسجيلات أو تكليفات."
+                if "grade_level" in attrs:
+                    errors["grade_level"] = "لا يمكن تغيير صف شعبة تحتوي على تسجيلات أو تكليفات."
+                raise serializers.ValidationError(errors)
+        return attrs
+
 
 class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
@@ -273,3 +300,13 @@ class GradeSubjectSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
+
+    def validate(self, attrs):
+        if self.instance is not None and self.instance.teacher_assignments.exists():
+            errors = {}
+            for field in ("academic_year", "grade_level", "subject"):
+                if field in attrs and getattr(self.instance, f"{field}_id") != attrs[field].pk:
+                    errors[field] = "لا يمكن تغيير هذا الحقل لأن مادة الخطة مرتبطة بتكليفات تعليمية."
+            if errors:
+                raise serializers.ValidationError(errors)
+        return attrs

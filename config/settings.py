@@ -119,6 +119,8 @@ INSTALLED_APPS = [
     "accounts",
     "academics",
     "teaching",
+    "students",
+    "audit_logs",
 
     
 ]

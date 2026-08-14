@@ -114,14 +114,14 @@ class AccountManagementApiTests(TestCase):
         self.authenticate(self.admin)
         admin_names = {
             item["username"]
-            for item in self.client.get("/api/v1/accounts/users/").data["results"]
+            for item in self.client.get("/api/v1/accounts/users/").data["data"]["results"]
         }
         self.assertIn(self.secretariat.username, admin_names)
         self.assertNotIn(self.root.username, admin_names)
 
         self.authenticate(self.secretariat)
         response = self.client.get("/api/v1/accounts/users/")
-        names = {item["username"] for item in response.data["results"]}
+        names = {item["username"] for item in response.data["data"]["results"]}
         self.assertNotIn(self.admin.username, names)
         self.assertNotIn(self.root.username, names)
         self.assertEqual(
@@ -132,7 +132,7 @@ class AccountManagementApiTests(TestCase):
         self.authenticate(self.supervisor)
         roles = {
             item["role"]
-            for item in self.client.get("/api/v1/accounts/users/").data["results"]
+            for item in self.client.get("/api/v1/accounts/users/").data["data"]["results"]
         }
         self.assertEqual(roles, {User.Role.GUARDIAN})
 
@@ -158,9 +158,11 @@ class AccountManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["code"], "USERS_RETRIEVED")
-        self.assertIn("count", response.data)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["message"], "تم جلب قائمة المستخدمين بنجاح.")
+        self.assertIn("count", response.data["data"])
         self.assertEqual(
-            [item["username"] for item in response.data["results"]], ["guardian"]
+            [item["username"] for item in response.data["data"]["results"]], ["guardian"]
         )
 
     def test_create_user_returns_one_time_hashed_temporary_password(self):
@@ -172,7 +174,8 @@ class AccountManagementApiTests(TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["code"], "USER_CREATED")
-        password = response.data["temporary_password"]
+        self.assertTrue(response.data["success"])
+        password = response.data["data"]["temporary_password"]
         user = User.objects.get(username="guardian2")
         self.assertTrue(user.check_password(password))
         self.assertTrue(user.must_change_password)
@@ -300,7 +303,9 @@ class AccountManagementApiTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["code"], "PASSWORD_RESET")
         self.teacher.refresh_from_db()
-        self.assertTrue(self.teacher.check_password(response.data["temporary_password"]))
+        self.assertTrue(
+            self.teacher.check_password(response.data["data"]["temporary_password"])
+        )
         self.assertTrue(self.teacher.must_change_password)
         self.assertIsNotNone(self.teacher.temporary_password_expires_at)
         self.assertEqual(self.teacher.token_version, 2)
@@ -459,7 +464,7 @@ class WebMeUpdateTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["code"], "VALIDATION_ERROR")
-        self.assertIn("email", response.data)
+        self.assertIn("email", response.data["errors"])
 
     def test_administrative_and_security_fields_cannot_be_modified(self):
         self.authenticate()
@@ -511,5 +516,46 @@ class WebMeUpdateTests(TestCase):
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["code"], "CURRENT_USER_RETRIEVED")
-        self.assertEqual(response.data["id"], str(self.user.pk))
-        self.assertNotIn("password", response.data)
+        self.assertEqual(response.data["data"]["id"], str(self.user.pk))
+        self.assertNotIn("password", response.data["data"])
+
+
+class WebLoginEnvelopeTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="login-user", password="LoginStrong!934",
+            role=User.Role.SCHOOL_ADMIN, must_change_password=False,
+        )
+
+    def test_login_success_uses_unified_envelope(self):
+        response = self.client.post(
+            "/api/v1/auth/web/login/",
+            {"identifier": self.user.username, "password": "LoginStrong!934"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["code"], "LOGIN_SUCCESS")
+        self.assertEqual(response.data["message"], "تم تسجيل الدخول بنجاح.")
+        self.assertEqual(response.data["data"]["user"]["username"], self.user.username)
+
+    def test_login_failure_uses_safe_authentication_envelope(self):
+        response = self.client.post(
+            "/api/v1/auth/web/login/",
+            {"identifier": self.user.username, "password": "wrong"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertFalse(response.data["success"])
+        self.assertEqual(response.data["code"], "INVALID_CREDENTIALS")
+        self.assertIn("message", response.data)
+        self.assertNotIn("detail", response.data)
+        self.assertIsNone(response.data["meta"]["requester_role"])
+
+    def test_default_english_drf_errors_remain_translated(self):
+        response = self.client.post("/api/v1/auth/web/login/", {}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["errors"]["identifier"], ["هذا الحقل مطلوب."])
+        self.assertEqual(response.data["errors"]["password"], ["هذا الحقل مطلوب."])
+        self.assertIsNone(response.data["meta"]["requester_role"])
