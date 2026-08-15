@@ -6,6 +6,7 @@ from accounts.policies import (
     can_view_accounts,
 )
 
+
 class IsWebDashboardUser(BasePermission):
     """
     تسمح فقط لمستخدمي لوحة الويب.
@@ -73,6 +74,7 @@ class CanResetPasswords(BasePermission):
     def has_permission(self, request, view):
         user = request.user
         return bool(user.is_superuser or user.role == user.Role.SCHOOL_ADMIN)
+
 
 class CanViewAccounts(BasePermission):
     """
