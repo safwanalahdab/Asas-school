@@ -113,7 +113,12 @@ class GuardianStudent(models.Model):
     def __str__(self):
         return f"{self.guardian} - {self.student}"
 
+
 class Enrollment(models.Model):
+    class TransportationMethod(models.TextChoices):
+        SCHOOL_BUS = "school_bus", "باص المدرسة"
+        GUARDIAN = "guardian", "ولي الأمر"
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -148,6 +153,22 @@ class Enrollment(models.Model):
         auto_now=True,
     )
 
+    usual_arrival_method = models.CharField(
+        max_length=20,
+        choices=TransportationMethod.choices,
+        default=TransportationMethod.SCHOOL_BUS,
+        null=True,
+        blank=True,
+    )
+
+    usual_departure_method = models.CharField(
+        max_length=20,
+        choices=TransportationMethod.choices,
+        default=TransportationMethod.SCHOOL_BUS,
+        null=True,
+        blank=True,
+    )
+
     class Meta:
         db_table = "students_enrollment"
 
@@ -177,11 +198,8 @@ class Enrollment(models.Model):
         ]
 
     def __str__(self):
-        return (
-            f"{self.student} - "
-            f"{self.section} - "
-            f"{self.academic_year}"
-        )
+        return f"{self.student} - " f"{self.section} - " f"{self.academic_year}"
+
 
 class StudentAuditLog(models.Model):
     class EventType(models.TextChoices):
@@ -237,7 +255,4 @@ class StudentAuditLog(models.Model):
         ]
 
     def __str__(self):
-        return (
-            f"{self.get_event_type_display()} - "
-            f"{self.enrollment.student}"
-        )
+        return f"{self.get_event_type_display()} - " f"{self.enrollment.student}"

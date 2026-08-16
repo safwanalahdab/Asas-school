@@ -90,6 +90,8 @@ class EnrollmentAdmin(admin.ModelAdmin):
         "grade_level_display",
         "section",
         "enrollment_date",
+        "usual_arrival_method",
+        "usual_departure_method",
         "created_at",
     )
 
@@ -97,6 +99,8 @@ class EnrollmentAdmin(admin.ModelAdmin):
         "academic_year",
         "section__grade_level",
         "section",
+        "usual_arrival_method",
+        "usual_departure_method",
     )
 
     search_fields = (

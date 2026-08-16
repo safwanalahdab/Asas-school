@@ -121,6 +121,9 @@ INSTALLED_APPS = [
     "teaching",
     "students",
     "audit_logs",
+    "attendance",
+    "behavior",
+    
 
     
 ]

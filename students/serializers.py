@@ -164,6 +164,8 @@ class EnrollmentSerializer(serializers.ModelSerializer):
             "grade_level",
             "grade_level_display",
             "enrollment_date",
+            "usual_arrival_method",
+            "usual_departure_method",
             "created_at",
             "updated_at",
         )
