@@ -66,4 +66,8 @@ urlpatterns = [
         "api/v1/homework/",
         include("homework.urls"),
     ),
+    path(
+        "api/v1/",
+        include("announcements.urls"),
+    ),
 ]
