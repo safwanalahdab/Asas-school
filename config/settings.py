@@ -123,9 +123,8 @@ INSTALLED_APPS = [
     "audit_logs",
     "attendance",
     "behavior",
-    
+    "homework",
 
-    
 ]
 
 

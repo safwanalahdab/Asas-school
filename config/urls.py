@@ -59,7 +59,11 @@ urlpatterns = [
     ),
     path("api/v1/attendance/", include("attendance.urls")),
     path(
-      "api/v1/behavior/",
-      include("behavior.urls"),
+        "api/v1/behavior/",
+        include("behavior.urls"),
+    ),
+    path(
+        "api/v1/homework/",
+        include("homework.urls"),
     ),
 ]
