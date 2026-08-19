@@ -125,6 +125,8 @@ INSTALLED_APPS = [
     "behavior",
     "homework",
     "announcements",
+    "school_requests",
+    
 ]
 
 

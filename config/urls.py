@@ -70,4 +70,8 @@ urlpatterns = [
         "api/v1/",
         include("announcements.urls"),
     ),
+    path(
+        "api/v1/requests/",
+        include("school_requests.urls"),
+    ),
 ]
