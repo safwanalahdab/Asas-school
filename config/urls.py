@@ -74,4 +74,8 @@ urlpatterns = [
         "api/v1/requests/",
         include("school_requests.urls"),
     ),
+    path(
+        "api/v1/finance/",
+        include("finance.urls"),
+    ),
 ]

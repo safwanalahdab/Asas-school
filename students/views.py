@@ -42,8 +42,14 @@ from .serializers import (
 )
 from .services import transfer_student_between_sections
 
+from finance.services import (
+    ensure_financial_account_for_enrollment,
+)
 
-class StudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+
+class StudentViewSet(
+    ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet
+):
     response_messages = {
         "list": ("STUDENTS_RETRIEVED", "تم جلب قائمة الطلاب بنجاح."),
         "retrieve": ("STUDENT_RETRIEVED", "تم جلب بيانات الطالب بنجاح."),
@@ -126,7 +132,12 @@ class StudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Mo
         try:
             return super().destroy(request, *args, **kwargs)
         except ProtectedError as exc:
-            raise ValidationError({"code": "STUDENT_DELETE_BLOCKED", "detail": "لا يمكن حذف الطالب لوجود تسجيلات دراسية أو رابط ولي أمر أو سجل انتقال مرتبط به. يمكنك تعطيله مع الاحتفاظ بسجله الدراسي."}) from exc
+            raise ValidationError(
+                {
+                    "code": "STUDENT_DELETE_BLOCKED",
+                    "detail": "لا يمكن حذف الطالب لوجود تسجيلات دراسية أو رابط ولي أمر أو سجل انتقال مرتبط به. يمكنك تعطيله مع الاحتفاظ بسجله الدراسي.",
+                }
+            ) from exc
 
     @action(
         detail=True,
@@ -148,7 +159,12 @@ class StudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Mo
         with transaction.atomic():
             student.is_active = True
             student.save(update_fields=["is_active", "updated_at"])
-            log_event(actor=request.user, action=AuditLog.Action.ACTIVATE, instance=student, changes={"is_active": {"before": False, "after": True}})
+            log_event(
+                actor=request.user,
+                action=AuditLog.Action.ACTIVATE,
+                instance=student,
+                changes={"is_active": {"before": False, "after": True}},
+            )
 
         return Response(
             {
@@ -179,7 +195,12 @@ class StudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Mo
         with transaction.atomic():
             student.is_active = False
             student.save(update_fields=["is_active", "updated_at"])
-            log_event(actor=request.user, action=AuditLog.Action.DEACTIVATE, instance=student, changes={"is_active": {"before": True, "after": False}})
+            log_event(
+                actor=request.user,
+                action=AuditLog.Action.DEACTIVATE,
+                instance=student,
+                changes={"is_active": {"before": True, "after": False}},
+            )
 
         return Response(
             {
@@ -191,9 +212,14 @@ class StudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Mo
         )
 
 
-class GuardianStudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class GuardianStudentViewSet(
+    ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet
+):
     response_messages = {
-        "list": ("GUARDIAN_LINKS_RETRIEVED", "تم جلب روابط أولياء الأمور بالطلاب بنجاح."),
+        "list": (
+            "GUARDIAN_LINKS_RETRIEVED",
+            "تم جلب روابط أولياء الأمور بالطلاب بنجاح.",
+        ),
         "retrieve": ("GUARDIAN_LINK_RETRIEVED", "تم جلب رابط ولي الأمر بالطالب بنجاح."),
         "create": ("GUARDIAN_LINK_CREATED", "تم ربط ولي الأمر بالطالب بنجاح."),
         "destroy": (
@@ -252,7 +278,9 @@ class GuardianStudentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, vie
     ]
 
 
-class EnrollmentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class EnrollmentViewSet(
+    ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet
+):
     response_messages = {
         "list": ("ENROLLMENTS_RETRIEVED", "تم جلب قائمة تسجيلات الطلاب بنجاح."),
         "retrieve": ("ENROLLMENT_RETRIEVED", "تم جلب تسجيل الطالب بنجاح."),
@@ -280,6 +308,17 @@ class EnrollmentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets
         "options",
         "delete",
     ]
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        super().perform_create(serializer)
+
+        enrollment = serializer.instance
+
+        ensure_financial_account_for_enrollment(
+            enrollment=enrollment,
+            actor=self.request.user,
+        )
 
     queryset = Enrollment.objects.select_related(
         "student",
@@ -340,7 +379,12 @@ class EnrollmentViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets
     def destroy(self, request, *args, **kwargs):
         enrollment = self.get_object()
         if enrollment.audit_logs.exists():
-            raise ValidationError({"code": "ENROLLMENT_DELETE_BLOCKED", "detail": "لا يمكن حذف التسجيل لأنه أصبح جزءًا من سجل انتقالات الطالب."})
+            raise ValidationError(
+                {
+                    "code": "ENROLLMENT_DELETE_BLOCKED",
+                    "detail": "لا يمكن حذف التسجيل لأنه أصبح جزءًا من سجل انتقالات الطالب.",
+                }
+            )
         return super().destroy(request, *args, **kwargs)
 
     def get_serializer_class(self):

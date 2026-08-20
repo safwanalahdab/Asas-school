@@ -1,11 +1,16 @@
 from django.contrib import admin
 
+from finance.services import (
+    ensure_financial_account_for_enrollment,
+)
+
 from .models import (
     Enrollment,
     GuardianStudent,
     Student,
     StudentAuditLog,
 )
+
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
@@ -42,7 +47,11 @@ class StudentAdmin(admin.ModelAdmin):
     def full_name_display(self, obj):
         return obj.full_name
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(
+        self,
+        request,
+        obj=None,
+    ):
         return False
 
 
@@ -79,8 +88,13 @@ class GuardianStudentAdmin(admin.ModelAdmin):
         "updated_at",
     )
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(
+        self,
+        request,
+        obj=None,
+    ):
         return False
+
 
 @admin.register(Enrollment)
 class EnrollmentAdmin(admin.ModelAdmin):
@@ -130,8 +144,33 @@ class EnrollmentAdmin(admin.ModelAdmin):
     def grade_level_display(self, obj):
         return obj.section.grade_level.name
 
-    def has_delete_permission(self, request, obj=None):
+    def save_model(
+        self,
+        request,
+        obj,
+        form,
+        change,
+    ):
+        super().save_model(
+            request,
+            obj,
+            form,
+            change,
+        )
+
+        if not change:
+            ensure_financial_account_for_enrollment(
+                enrollment=obj,
+                actor=request.user,
+            )
+
+    def has_delete_permission(
+        self,
+        request,
+        obj=None,
+    ):
         return False
+
 
 @admin.register(StudentAuditLog)
 class StudentAuditLogAdmin(admin.ModelAdmin):
@@ -192,8 +231,15 @@ class StudentAuditLogAdmin(admin.ModelAdmin):
     def academic_year_display(self, obj):
         return obj.enrollment.academic_year.name
 
-    def has_add_permission(self, request):
+    def has_add_permission(
+        self,
+        request,
+    ):
         return False
 
-    def has_delete_permission(self, request, obj=None):
+    def has_delete_permission(
+        self,
+        request,
+        obj=None,
+    ):
         return False
