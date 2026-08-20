@@ -127,7 +127,7 @@ INSTALLED_APPS = [
     "announcements",
     "school_requests",
     "finance",
-    
+    "appointments",
 
 ]
 
