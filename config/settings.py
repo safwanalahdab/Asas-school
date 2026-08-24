@@ -129,6 +129,7 @@ INSTALLED_APPS = [
     "finance",
     "appointments",
     "dashboard",
+    "grades",
 
 ]
 

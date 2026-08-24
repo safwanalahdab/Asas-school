@@ -86,4 +86,8 @@ urlpatterns = [
         "api/v1/dashboard/",
         include("dashboard.urls"),
     ),
+    path(
+        "api/v1/grades/",
+        include("grades.urls"),
+    ),
 ]
