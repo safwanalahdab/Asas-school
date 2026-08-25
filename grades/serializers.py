@@ -12,37 +12,45 @@ from students.models import Enrollment
 
 from .models import (
     Assessment,
+    AssessmentSection,
     StudentScore,
 )
+
+
+class AssessmentSectionSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source="section.name", read_only=True)
+    published_by_username = serializers.CharField(source="published_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = AssessmentSection
+        fields = ("id", "section", "name", "status", "published_by", "published_by_username", "published_at")
+        read_only_fields = fields
 
 
 class AssessmentSerializer(
     serializers.ModelSerializer,
 ):
     academic_year = serializers.UUIDField(
-        source="section.academic_year_id",
+        source="grade_subject.academic_year_id",
         read_only=True,
     )
 
     academic_year_display = serializers.CharField(
-        source="section.academic_year.name",
+        source="grade_subject.academic_year.name",
         read_only=True,
     )
 
     grade_level = serializers.UUIDField(
-        source="section.grade_level_id",
+        source="grade_subject.grade_level_id",
         read_only=True,
     )
 
     grade_level_display = serializers.CharField(
-        source="section.grade_level.name",
+        source="grade_subject.grade_level.name",
         read_only=True,
     )
 
-    section_display = serializers.CharField(
-        source="section.name",
-        read_only=True,
-    )
+    sections = AssessmentSectionSerializer(source="assessment_sections", many=True, read_only=True)
 
     subject = serializers.UUIDField(
         source="grade_subject.subject_id",
@@ -59,20 +67,9 @@ class AssessmentSerializer(
         read_only=True,
     )
 
-    status_display = serializers.CharField(
-        source="get_status_display",
-        read_only=True,
-    )
-
     created_by_username = serializers.CharField(
         source="created_by.username",
         read_only=True,
-    )
-
-    published_by_username = serializers.CharField(
-        source="published_by.username",
-        read_only=True,
-        allow_null=True,
     )
 
     class Meta:
@@ -84,8 +81,7 @@ class AssessmentSerializer(
             "academic_year_display",
             "grade_level",
             "grade_level_display",
-            "section",
-            "section_display",
+            "sections",
             "grade_subject",
             "subject",
             "subject_display",
@@ -94,13 +90,8 @@ class AssessmentSerializer(
             "title",
             "max_score",
             "assessment_date",
-            "status",
-            "status_display",
             "created_by",
             "created_by_username",
-            "published_by",
-            "published_by_username",
-            "published_at",
             "created_at",
             "updated_at",
         )
@@ -258,6 +249,7 @@ class StudentScoreSerializer(
             "id",
             "assessment",
             "enrollment",
+            "recorded_section",
             "student",
             "student_display",
             "score",
@@ -290,6 +282,8 @@ class BulkScoreRecordSerializer(
 class BulkAssessmentScoresSerializer(
     serializers.Serializer,
 ):
+    section = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all())
+
     records = BulkScoreRecordSerializer(
         many=True,
         allow_empty=False,
@@ -377,6 +371,7 @@ class PublishResultSerializer(
     published_count = serializers.IntegerField(
         read_only=True,
     )
+    skipped_future_count = serializers.IntegerField(read_only=True)
 
 
 class StudentResultsQuerySerializer(
@@ -420,7 +415,7 @@ class StudentResultAssessmentSerializer(
     )
 
     status = serializers.ChoiceField(
-        choices=Assessment.Status.choices,
+        choices=AssessmentSection.Status.choices,
         read_only=True,
     )
 

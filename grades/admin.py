@@ -1,163 +1,87 @@
+from django import forms
 from django.contrib import admin
 
-from .models import (
-    Assessment,
-    StudentScore,
-)
+from .models import Assessment, AssessmentSection, ScoreAuditLog, StudentScore
+from .services import record_score_audit
+
+
+class FullCleanModelForm(forms.ModelForm):
+    def _post_clean(self):
+        super()._post_clean()
+        if self.instance:
+            self.instance.full_clean(exclude=self._get_validation_exclusions(), validate_unique=False)
 
 
 @admin.register(Assessment)
 class AssessmentAdmin(admin.ModelAdmin):
-    list_display = (
-        "title",
-        "subject_display",
-        "grade_level_display",
-        "section",
-        "term",
-        "max_score",
-        "assessment_date",
-        "status",
-        "created_by",
-        "published_by",
-        "published_at",
-        "created_at",
-    )
+    form = FullCleanModelForm
+    list_display = ("title", "grade_subject", "term", "max_score", "assessment_date", "created_by", "created_at")
+    list_filter = ("term", "grade_subject__academic_year", "grade_subject__grade_level", "grade_subject__subject", "assessment_date")
+    search_fields = ("title", "grade_subject__subject__name", "created_by__username")
+    list_select_related = ("grade_subject__subject", "term", "created_by")
+    readonly_fields = ("id", "created_at", "updated_at")
 
-    list_filter = (
-        "status",
-        "term",
-        "section__academic_year",
-        "section__grade_level",
-        "section",
-        "grade_subject__subject",
-        "assessment_date",
-    )
+    def save_model(self, request, obj, form, change):
+        if not obj.created_by_id:
+            obj.created_by = request.user
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
 
-    search_fields = (
-        "title",
-        "section__name",
-        "section__grade_level__name",
-        "grade_subject__subject__name",
-        "created_by__username",
-        "published_by__username",
-    )
 
-    list_select_related = (
-        "section",
-        "section__academic_year",
-        "section__grade_level",
-        "grade_subject",
-        "grade_subject__subject",
-        "term",
-        "created_by",
-        "published_by",
-    )
+@admin.register(AssessmentSection)
+class AssessmentSectionAdmin(admin.ModelAdmin):
+    form = FullCleanModelForm
+    list_display = ("assessment", "section", "status", "published_by", "published_at")
+    list_filter = ("status", "section__academic_year", "section__grade_level", "section")
+    search_fields = ("assessment__title", "section__name")
+    list_select_related = ("assessment__grade_subject", "section", "published_by")
+    readonly_fields = ("id", "created_at", "updated_at")
 
-    readonly_fields = (
-        "id",
-        "created_at",
-        "updated_at",
-    )
-
-    ordering = (
-        "-assessment_date",
-        "-created_at",
-    )
-
-    date_hierarchy = "assessment_date"
-
-    @admin.display(
-        description="المادة",
-        ordering="grade_subject__subject__name",
-    )
-    def subject_display(self, obj):
-        return obj.grade_subject.subject.name
-
-    @admin.display(
-        description="الصف",
-        ordering="section__grade_level__name",
-    )
-    def grade_level_display(self, obj):
-        return obj.section.grade_level.name
+    def save_model(self, request, obj, form, change):
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(StudentScore)
 class StudentScoreAdmin(admin.ModelAdmin):
-    list_display = (
-        "student_display",
-        "assessment",
-        "subject_display",
-        "section_display",
-        "score",
-        "max_score_display",
-        "updated_by",
-        "updated_at",
-    )
+    form = FullCleanModelForm
+    list_display = ("student_display", "assessment", "recorded_section", "score", "updated_by", "updated_at")
+    list_filter = ("assessment__term", "recorded_section", "assessment__grade_subject__subject")
+    search_fields = ("enrollment__student__first_name", "enrollment__student__last_name", "assessment__title")
+    list_select_related = ("assessment", "enrollment__student", "recorded_section", "updated_by")
+    readonly_fields = ("id", "created_at", "updated_at")
 
-    list_filter = (
-        "assessment__status",
-        "assessment__term",
-        "assessment__section__academic_year",
-        "assessment__section__grade_level",
-        "assessment__section",
-        "assessment__grade_subject__subject",
-    )
-
-    search_fields = (
-        "enrollment__student__first_name",
-        "enrollment__student__last_name",
-        "enrollment__student__father_name",
-        "enrollment__student__mother_name",
-        "assessment__title",
-        "assessment__grade_subject__subject__name",
-        "updated_by__username",
-    )
-
-    list_select_related = (
-        "assessment",
-        "assessment__section",
-        "assessment__section__grade_level",
-        "assessment__grade_subject",
-        "assessment__grade_subject__subject",
-        "enrollment",
-        "enrollment__student",
-        "updated_by",
-    )
-
-    readonly_fields = (
-        "id",
-        "created_at",
-        "updated_at",
-    )
-
-    ordering = (
-        "-updated_at",
-    )
-
-    @admin.display(
-        description="الطالب",
-        ordering="enrollment__student__first_name",
-    )
+    @admin.display(description="الطالب", ordering="enrollment__student__first_name")
     def student_display(self, obj):
         return obj.enrollment.student.full_name
 
-    @admin.display(
-        description="المادة",
-        ordering="assessment__grade_subject__subject__name",
-    )
-    def subject_display(self, obj):
-        return obj.assessment.grade_subject.subject.name
+    def save_model(self, request, obj, form, change):
+        old_score = None
+        if change:
+            old_score = StudentScore.objects.get(pk=obj.pk).score
+        obj.updated_by = request.user
+        obj.full_clean()
+        super().save_model(request, obj, form, change)
+        record_score_audit(
+            student_score=obj,
+            old_score=old_score,
+            actor=request.user,
+            source=ScoreAuditLog.Source.ADMIN,
+        )
 
-    @admin.display(
-        description="الشعبة",
-        ordering="assessment__section__name",
-    )
-    def section_display(self, obj):
-        return obj.assessment.section.name
 
-    @admin.display(
-        description="النهاية العظمى",
-        ordering="assessment__max_score",
-    )
-    def max_score_display(self, obj):
-        return obj.assessment.max_score
+@admin.register(ScoreAuditLog)
+class ScoreAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("assessment", "enrollment", "recorded_section", "old_score", "new_score", "actor", "source", "created_at")
+    list_filter = ("source", "recorded_section", "created_at")
+    search_fields = ("assessment__title", "enrollment__student__first_name", "enrollment__student__last_name", "actor__username")
+    readonly_fields = ("id", "assessment", "enrollment", "recorded_section", "old_score", "new_score", "actor", "source", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

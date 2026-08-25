@@ -7,7 +7,7 @@ from django.db.models import (
 from django.utils import timezone
 
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 
 from rest_framework import (
     mixins,
@@ -28,6 +28,7 @@ from config.api_responses import ArabicApiResponseMixin
 from teaching.models import TeacherAssignment
 
 from .filters import AssessmentFilter
+from academics.models import Section
 from .models import Assessment
 from .permissions import (
     CanAccessGrades,
@@ -55,8 +56,10 @@ from .services import (
     create_assessment,
     create_assessments_for_grade,
     delete_assessment,
+    ensure_actor_can_manage_scope,
     publish_grade_assessments,
     publish_section_assessments,
+    resolve_assessment_section,
     save_assessment_scores_bulk,
     update_assessment,
 )
@@ -77,9 +80,6 @@ class AssessmentViewSet(
     queryset = (
         Assessment.objects
         .select_related(
-            "section",
-            "section__academic_year",
-            "section__grade_level",
             "grade_subject",
             "grade_subject__academic_year",
             "grade_subject__grade_level",
@@ -87,8 +87,8 @@ class AssessmentViewSet(
             "term",
             "term__academic_year",
             "created_by",
-            "published_by",
         )
+        .prefetch_related("assessment_sections__section", "assessment_sections__published_by")
         .all()
     )
 
@@ -108,7 +108,7 @@ class AssessmentViewSet(
 
     search_fields = [
         "title",
-        "section__name",
+        "assessment_sections__section__name",
         "grade_subject__subject__name",
     ]
 
@@ -257,9 +257,7 @@ class AssessmentViewSet(
                 TeacherAssignment.objects
                 .filter(
                     teacher=user,
-                    section_id=OuterRef(
-                        "section_id"
-                    ),
+                    section_id=OuterRef("assessment_sections__section_id"),
                     grade_subject_id=OuterRef(
                         "grade_subject_id"
                     ),
@@ -284,7 +282,7 @@ class AssessmentViewSet(
                 )
                 .filter(
                     teacher_has_access=True,
-                )
+                ).distinct()
             )
 
         return queryset.none()
@@ -409,9 +407,7 @@ class AssessmentViewSet(
         request=CreateGradeAssessmentsSerializer,
         responses={
             status.HTTP_201_CREATED:
-                AssessmentSerializer(
-                    many=True
-                ),
+                AssessmentSerializer,
         },
     )
     @action(
@@ -431,7 +427,7 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
-        assessments = (
+        assessment = (
             create_assessments_for_grade(
                 actor=request.user,
                 **serializer.validated_data,
@@ -440,8 +436,7 @@ class AssessmentViewSet(
 
         response_serializer = (
             AssessmentSerializer(
-                assessments,
-                many=True,
+                assessment,
                 context=(
                     self.get_serializer_context()
                 ),
@@ -454,6 +449,7 @@ class AssessmentViewSet(
         )
 
     @extend_schema(
+        parameters=[OpenApiParameter(name="section", type=str, location=OpenApiParameter.QUERY, required=False, description="معرّف الشعبة؛ يصبح إلزاميًا عندما يطبق التقييم على أكثر من شعبة.")],
         responses={
             status.HTTP_200_OK:
                 AssessmentScoresSheetSerializer,
@@ -471,8 +467,20 @@ class AssessmentViewSet(
     ):
         assessment = self.get_object()
 
+        section_id = request.query_params.get("section")
+        section = None
+        if section_id:
+            try:
+                section = Section.objects.get(pk=section_id)
+            except (Section.DoesNotExist, ValueError):
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({"section": "معرّف الشعبة غير صالح."})
+        link = resolve_assessment_section(assessment=assessment, section=section)
+        ensure_actor_can_manage_scope(actor=request.user, section=link.section, grade_subject=assessment.grade_subject)
+
         records = get_assessment_score_rows(
             assessment=assessment,
+            section=link.section,
         )
 
         response_serializer = (
@@ -518,8 +526,19 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
+        link = resolve_assessment_section(
+            assessment=assessment,
+            section=serializer.validated_data["section"],
+        )
+        ensure_actor_can_manage_scope(
+            actor=request.user,
+            section=link.section,
+            grade_subject=assessment.grade_subject,
+        )
+
         save_assessment_scores_bulk(
             assessment=assessment,
+            section=link.section,
             records=(
                 serializer.validated_data[
                     "records"
@@ -530,6 +549,7 @@ class AssessmentViewSet(
 
         records = get_assessment_score_rows(
             assessment=assessment,
+            section=link.section,
         )
 
         response_serializer = (
@@ -572,7 +592,7 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
-        published_count = (
+        result = (
             publish_section_assessments(
                 actor=request.user,
                 **serializer.validated_data,
@@ -582,8 +602,7 @@ class AssessmentViewSet(
         response_serializer = (
             PublishResultSerializer(
                 {
-                    "published_count":
-                        published_count,
+                    **result,
                 }
             )
         )
@@ -616,7 +635,7 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
-        published_count = (
+        result = (
             publish_grade_assessments(
                 actor=request.user,
                 **serializer.validated_data,
@@ -626,8 +645,7 @@ class AssessmentViewSet(
         response_serializer = (
             PublishResultSerializer(
                 {
-                    "published_count":
-                        published_count,
+                    **result,
                 }
             )
         )

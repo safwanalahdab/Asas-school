@@ -54,10 +54,9 @@ class CanAccessGrades(BasePermission):
             return True
 
         if user.role == User.Role.TEACHER:
-            return teacher_has_active_assignment(
-                teacher=user,
-                section=obj.section,
-                grade_subject=obj.grade_subject,
+            return any(
+                teacher_has_active_assignment(teacher=user, section=link.section, grade_subject=obj.grade_subject)
+                for link in obj.assessment_sections.all()
             )
 
         return False

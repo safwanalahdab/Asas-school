@@ -1,11 +1,11 @@
 from django_filters import rest_framework as filters
 
-from .models import Assessment
+from .models import Assessment, AssessmentSection
 
 
 class AssessmentFilter(filters.FilterSet):
     academic_year = filters.UUIDFilter(
-        field_name="section__academic_year_id",
+        field_name="grade_subject__academic_year_id",
     )
 
     term = filters.UUIDFilter(
@@ -13,11 +13,11 @@ class AssessmentFilter(filters.FilterSet):
     )
 
     grade_level = filters.UUIDFilter(
-        field_name="section__grade_level_id",
+        field_name="grade_subject__grade_level_id",
     )
 
     section = filters.UUIDFilter(
-        field_name="section_id",
+        field_name="assessment_sections__section_id",
     )
 
     grade_subject = filters.UUIDFilter(
@@ -29,7 +29,8 @@ class AssessmentFilter(filters.FilterSet):
     )
 
     status = filters.ChoiceFilter(
-        choices=Assessment.Status.choices,
+        field_name="assessment_sections__status",
+        choices=AssessmentSection.Status.choices,
     )
 
     assessment_from = filters.DateFilter(
