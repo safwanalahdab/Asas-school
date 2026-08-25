@@ -79,11 +79,11 @@ class TeacherAssignmentEnvelopeTests(TestCase):
         self.assertEqual(response.data["code"], "TEACHER_ASSIGNMENT_REOPENED")
         assignment.refresh_from_db()
         self.assertIsNone(assignment.end_date)
-        self.assertTrue(AuditLog.objects.filter(resource_id=str(assignment.pk), action="REOPEN", actor=admin).exists())
+        self.assertTrue(AuditLog.objects.filter(target_id=str(assignment.pk), action="REOPEN", actor=admin).exists())
         deleted = client.delete(f"/api/v1/teaching/assignments/{assignment.pk}/")
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(deleted.data["code"], "TEACHER_ASSIGNMENT_DELETED")
-        self.assertTrue(AuditLog.objects.filter(resource_id=str(assignment.pk), action="DELETE", actor=admin).exists())
+        self.assertTrue(AuditLog.objects.filter(target_id=str(assignment.pk), action="DELETE", actor=admin).exists())
 
     def test_reopen_is_blocked_when_it_would_overlap(self):
         admin = User.objects.create_user(username="test-school-admin", password="Strong!934", role=User.Role.SCHOOL_ADMIN, must_change_password=False)

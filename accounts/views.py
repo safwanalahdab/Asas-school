@@ -17,7 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from config.api_responses import ArabicApiResponseMixin
 from audit_logs.models import AuditLog
-from audit_logs.services import changed_fields, log_event, safe_snapshot
+from audit_logs.services import get_actor_display, record_audit_event
 from django.db import transaction
 
 from accounts.authentication import (
@@ -480,7 +480,12 @@ class UserViewSet(
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        log_event(actor=request.user, action=AuditLog.Action.CREATE, instance=user, changes={"created_record": safe_snapshot(user)})
+        record_audit_event(
+            actor=request.user, module=AuditLog.Module.ACCOUNTS,
+            action=AuditLog.Action.CREATE,
+            message=f"أنشأ {get_actor_display(request.user)} حساب المستخدم {user}.",
+            target=user, metadata={"role": user.role},
+        )
         return Response(
             {
                 "code": "USER_CREATED",
@@ -495,9 +500,15 @@ class UserViewSet(
         user = self.get_object()
         serializer = self.get_serializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        changes = changed_fields(user, serializer.validated_data)
+        old_role = user.role
         serializer.save()
-        log_event(actor=request.user, action=AuditLog.Action.UPDATE, instance=user, changes=changes)
+        if "role" in serializer.validated_data and old_role != user.role:
+            record_audit_event(
+                actor=request.user, module=AuditLog.Module.ACCOUNTS,
+                action=AuditLog.Action.CHANGE_ROLE,
+                message=f"غيّر {get_actor_display(request.user)} دور المستخدم {user}.",
+                target=user, metadata={"old_role": old_role, "new_role": user.role},
+            )
         return Response(
             {
                 "code": "USER_UPDATED",

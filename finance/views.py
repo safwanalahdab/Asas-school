@@ -18,6 +18,8 @@ from rest_framework.viewsets import (
 )
 
 from accounts.permissions import PasswordChangeGate
+from audit_logs.models import AuditLog
+from audit_logs.services import get_actor_display, record_audit_event
 from config.api_responses import ArabicApiResponseMixin
 
 from .filters import (
@@ -137,6 +139,13 @@ class GradeTuitionPlanViewSet(
             tuition_plan=tuition_plan,
             actor=self.request.user,
         )
+        record_audit_event(
+            actor=self.request.user, module=AuditLog.Module.FINANCE,
+            action=AuditLog.Action.CREATE,
+            message=f"حدد {get_actor_display(self.request.user)} رسوم الصف {tuition_plan.grade_level} للسنة {tuition_plan.academic_year} بقيمة {tuition_plan.base_tuition_usd} USD.",
+            target=tuition_plan,
+            metadata={"grade": str(tuition_plan.grade_level), "academic_year": str(tuition_plan.academic_year), "price": tuition_plan.base_tuition_usd, "currency": "USD"},
+        )
 
     def perform_update(
         self,
@@ -149,10 +158,19 @@ class GradeTuitionPlanViewSet(
         if new_price is None:
             return
 
+        old_price = serializer.instance.base_tuition_usd
         updated_plan = update_tuition_plan_price(
             tuition_plan=serializer.instance,
             new_base_tuition_usd=new_price,
         )
+        if old_price != updated_plan.base_tuition_usd:
+            record_audit_event(
+                actor=self.request.user, module=AuditLog.Module.FINANCE,
+                action=AuditLog.Action.UPDATE,
+                message=f"عدّل {get_actor_display(self.request.user)} رسوم الصف {updated_plan.grade_level} من {old_price} إلى {updated_plan.base_tuition_usd} USD.",
+                target=updated_plan,
+                metadata={"old_price": old_price, "new_price": updated_plan.base_tuition_usd, "currency": "USD"},
+            )
 
         serializer.instance = updated_plan
 

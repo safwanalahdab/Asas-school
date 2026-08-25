@@ -9,9 +9,8 @@ from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from config.api_responses import ArabicApiResponseMixin
-from audit_logs.mixins import AuditModelViewSetMixin
 from audit_logs.models import AuditLog
-from audit_logs.services import log_event
+from audit_logs.services import get_actor_display, record_audit_event
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
 from rest_framework.exceptions import ValidationError
@@ -47,8 +46,22 @@ from finance.services import (
 )
 
 
+class _AtomicCrudMixin:
+    @transaction.atomic
+    def perform_create(self, serializer):
+        serializer.save()
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        serializer.save()
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        instance.delete()
+
+
 class StudentViewSet(
-    ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet
+    ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet
 ):
     response_messages = {
         "list": ("STUDENTS_RETRIEVED", "تم جلب قائمة الطلاب بنجاح."),
@@ -159,12 +172,6 @@ class StudentViewSet(
         with transaction.atomic():
             student.is_active = True
             student.save(update_fields=["is_active", "updated_at"])
-            log_event(
-                actor=request.user,
-                action=AuditLog.Action.ACTIVATE,
-                instance=student,
-                changes={"is_active": {"before": False, "after": True}},
-            )
 
         return Response(
             {
@@ -195,12 +202,6 @@ class StudentViewSet(
         with transaction.atomic():
             student.is_active = False
             student.save(update_fields=["is_active", "updated_at"])
-            log_event(
-                actor=request.user,
-                action=AuditLog.Action.DEACTIVATE,
-                instance=student,
-                changes={"is_active": {"before": True, "after": False}},
-            )
 
         return Response(
             {
@@ -213,7 +214,7 @@ class StudentViewSet(
 
 
 class GuardianStudentViewSet(
-    ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet
+    ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet
 ):
     response_messages = {
         "list": (
@@ -277,9 +278,36 @@ class GuardianStudentViewSet(
         "-created_at",
     ]
 
+    @transaction.atomic
+    def perform_create(self, serializer):
+        link = serializer.save()
+        actor_name = get_actor_display(self.request.user)
+        record_audit_event(
+            actor=self.request.user, module=AuditLog.Module.STUDENTS,
+            action=AuditLog.Action.CREATE,
+            message=f"ربط {actor_name} ولي الأمر {link.guardian} بالطالب {link.student.full_name}.",
+            target=link,
+            metadata={"guardian": str(link.guardian), "student": link.student.full_name},
+        )
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        target_id, target_display = instance.pk, str(instance)
+        guardian, student = str(instance.guardian), instance.student.full_name
+        instance.delete()
+        actor_name = get_actor_display(self.request.user)
+        record_audit_event(
+            actor=self.request.user, module=AuditLog.Module.STUDENTS,
+            action=AuditLog.Action.DELETE,
+            message=f"فكّ {actor_name} ارتباط ولي الأمر {guardian} بالطالب {student}.",
+            target_type="students.GuardianStudent", target_id=target_id,
+            target_display=target_display,
+            metadata={"guardian": guardian, "student": student},
+        )
+
 
 class EnrollmentViewSet(
-    ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet
+    ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet
 ):
     response_messages = {
         "list": ("ENROLLMENTS_RETRIEVED", "تم جلب قائمة تسجيلات الطلاب بنجاح."),
@@ -311,13 +339,23 @@ class EnrollmentViewSet(
 
     @transaction.atomic
     def perform_create(self, serializer):
-        super().perform_create(serializer)
-
-        enrollment = serializer.instance
+        enrollment = serializer.save()
 
         ensure_financial_account_for_enrollment(
             enrollment=enrollment,
             actor=self.request.user,
+        )
+        actor_name = get_actor_display(self.request.user)
+        record_audit_event(
+            actor=self.request.user, module=AuditLog.Module.STUDENTS,
+            action=AuditLog.Action.CREATE,
+            message=f"سجّل {actor_name} الطالب {enrollment.student.full_name} في {enrollment.section} للسنة الدراسية {enrollment.academic_year}.",
+            target=enrollment,
+            metadata={
+                "student": enrollment.student.full_name,
+                "academic_year": str(enrollment.academic_year),
+                "section": str(enrollment.section),
+            },
         )
 
     queryset = Enrollment.objects.select_related(

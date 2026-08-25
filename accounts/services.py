@@ -5,7 +5,7 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 from audit_logs.models import AuditLog
-from audit_logs.services import log_event
+from audit_logs.services import get_actor_display, record_audit_event
 
 
 TEMPORARY_PASSWORD_TTL = timedelta(hours=72)
@@ -50,11 +50,12 @@ def set_account_active(user, is_active, *, actor=None):
     if not is_active:
         increment_token_version(locked_user)
     if actor is not None:
-        log_event(
-            actor=actor,
-            action=(AuditLog.Action.ACTIVATE if is_active else AuditLog.Action.DEACTIVATE),
-            instance=locked_user,
-            changes={"is_active": {"before": not is_active, "after": is_active}},
+        action = AuditLog.Action.ACTIVATE if is_active else AuditLog.Action.DEACTIVATE
+        record_audit_event(
+            actor=actor, module=AuditLog.Module.ACCOUNTS, action=action,
+            message=f"{'فعّل' if is_active else 'عطّل'} {get_actor_display(actor)} حساب المستخدم {locked_user}.",
+            target=locked_user,
+            metadata={"is_active": {"before": not is_active, "after": is_active}},
         )
     return locked_user, True
 
@@ -72,9 +73,10 @@ def reset_account_password(user, *, actor=None):
     )
     increment_token_version(locked_user)
     if actor is not None:
-        log_event(
-            actor=actor, action=AuditLog.Action.RESET_PASSWORD,
-            instance=locked_user,
-            changes={"event": "تمت إعادة تعيين كلمة مرور المستخدم."},
+        record_audit_event(
+            actor=actor, module=AuditLog.Module.ACCOUNTS,
+            action=AuditLog.Action.RESET_PASSWORD,
+            message=f"أعاد {get_actor_display(actor)} تعيين كلمة مرور المستخدم {locked_user}.",
+            target=locked_user, metadata={},
         )
     return locked_user, password

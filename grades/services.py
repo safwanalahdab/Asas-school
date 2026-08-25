@@ -7,6 +7,8 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from academics.models import Section
+from audit_logs.models import AuditLog
+from audit_logs.services import get_actor_display, record_audit_event
 from teaching.models import TeacherAssignment
 
 from .models import Assessment, AssessmentSection, ScoreAuditLog, StudentScore
@@ -190,6 +192,7 @@ def save_assessment_scores_bulk(*, assessment, section, records, actor, source=S
         raise ValidationError({"records": "يجب إرسال سجلات غير مكررة لطالب واحد على الأقل."})
     existing = {x.enrollment_id: x for x in StudentScore.objects.select_for_update().filter(assessment=assessment, enrollment_id__in=ids)}
     saved = []
+    changed_count = 0
     for record in records:
         enrollment, value = record["enrollment"], record.get("score")
         current = existing.get(enrollment.id)
@@ -197,12 +200,14 @@ def save_assessment_scores_bulk(*, assessment, section, records, actor, source=S
             _validate_score(assessment=assessment, section=section, enrollment=enrollment, score=value)
             current = StudentScore.objects.create(assessment=assessment, enrollment=enrollment, recorded_section=section, score=value, updated_by=actor)
             old = None
+            changed = True
         else:
             if current.recorded_section_id != section.id:
                 raise ValidationError({"enrollment": "العلامة التاريخية مسجلة تحت شعبة أخرى ولا يجوز نقلها ضمنيًا."})
             if value is not None and (value < ZERO or value > assessment.max_score):
                 raise ValidationError({"score": "العلامة يجب أن تكون بين صفر والنهاية العظمى."})
             old = current.score
+            changed = old != value
             current.score, current.updated_by = value, actor
             current.save(update_fields=["score", "updated_by", "updated_at"])
         record_score_audit(
@@ -212,6 +217,20 @@ def save_assessment_scores_bulk(*, assessment, section, records, actor, source=S
             source=source,
         )
         saved.append(current)
+        changed_count += int(changed)
+    if changed_count:
+        record_audit_event(
+            actor=actor, module=AuditLog.Module.GRADES, action=AuditLog.Action.UPDATE,
+            message=f"حدّث {get_actor_display(actor)} علامات مادة {assessment.grade_subject.subject} للشعبة {section} لـ{changed_count} طالبًا.",
+            target=assessment,
+            metadata={
+                "assessment": assessment.title,
+                "subject": str(assessment.grade_subject.subject),
+                "section": str(section),
+                "students_count": len(records),
+                "changed_count": changed_count,
+            },
+        )
     return saved
 
 
@@ -229,6 +248,13 @@ def publish_section_assessments(*, section, term, actor):
     links = AssessmentSection.objects.select_for_update().filter(section=section, assessment__term=term, assessment__assessment_date__lte=today, status=AssessmentSection.Status.DRAFT)
     count = links.update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     future = AssessmentSection.objects.filter(section=section, assessment__term=term, assessment__assessment_date__gt=today, status=AssessmentSection.Status.DRAFT).count()
+    if count:
+        record_audit_event(
+            actor=actor, module=AuditLog.Module.GRADES, action=AuditLog.Action.PUBLISH,
+            message=f"نشر {get_actor_display(actor)} نتائج الشعبة {section} للفصل {term.get_number_display()}.",
+            target=section,
+            metadata={"section": str(section), "term": str(term), "published_count": count, "skipped_future_count": future},
+        )
     return {"published_count": count, "skipped_future_count": future}
 
 
@@ -239,4 +265,11 @@ def publish_grade_assessments(*, grade_level, term, actor):
     base = AssessmentSection.objects.select_for_update().filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT)
     future = base.filter(assessment__assessment_date__gt=today).count()
     count = base.filter(assessment__assessment_date__lte=today).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
+    if count:
+        record_audit_event(
+            actor=actor, module=AuditLog.Module.GRADES, action=AuditLog.Action.PUBLISH,
+            message=f"نشر {get_actor_display(actor)} نتائج الصف {grade_level} للفصل {term.get_number_display()}.",
+            target=grade_level,
+            metadata={"grade_level": str(grade_level), "term": str(term), "published_count": count, "skipped_future_count": future},
+        )
     return {"published_count": count, "skipped_future_count": future}

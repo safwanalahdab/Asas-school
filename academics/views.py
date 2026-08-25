@@ -1,8 +1,10 @@
 from django.db.models.deletion import ProtectedError
+from django.db import transaction
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from config.api_responses import ArabicApiResponseMixin
-from audit_logs.mixins import AuditModelViewSetMixin
+from audit_logs.models import AuditLog
+from audit_logs.services import get_actor_display, record_audit_event
 
 from .permissions import AcademicManagementPermission
 
@@ -37,7 +39,21 @@ ACADEMIC_HTTP_METHODS = (
 )
 
 
-class AcademicYearViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class _AtomicCrudMixin:
+    @transaction.atomic
+    def perform_create(self, serializer):
+        serializer.save()
+
+    @transaction.atomic
+    def perform_update(self, serializer):
+        serializer.save()
+
+    @transaction.atomic
+    def perform_destroy(self, instance):
+        instance.delete()
+
+
+class AcademicYearViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
     response_messages = {
         "list": ("ACADEMIC_YEARS_RETRIEVED", "تم جلب قائمة السنوات الدراسية بنجاح."),
         "retrieve": ("ACADEMIC_YEAR_RETRIEVED", "تم جلب السنة الدراسية بنجاح."),
@@ -71,6 +87,26 @@ class AcademicYearViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewse
         "-start_date",
     ]
 
+    @transaction.atomic
+    def perform_update(self, serializer):
+        old_status = serializer.instance.status
+        academic_year = serializer.save()
+        new_status = academic_year.status
+        action = None
+        if old_status != new_status == AcademicYear.Status.ACTIVE:
+            action = AuditLog.Action.ACTIVATE
+        elif old_status != new_status == AcademicYear.Status.CLOSED:
+            action = AuditLog.Action.CLOSE
+        if action:
+            actor_name = get_actor_display(self.request.user)
+            record_audit_event(
+                actor=self.request.user, module=AuditLog.Module.ACADEMICS,
+                action=action,
+                message=f"{actor_name} {'فعّل' if action == AuditLog.Action.ACTIVATE else 'أغلق'} السنة الدراسية {academic_year}.",
+                target=academic_year,
+                metadata={"old_status": old_status, "new_status": new_status},
+            )
+
     def destroy(self, request, *args, **kwargs):
         academic_year = self.get_object()
 
@@ -88,7 +124,7 @@ class AcademicYearViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewse
             )
 
 
-class TermViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class TermViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
     response_messages = {
         "list": ("TERMS_RETRIEVED", "تم جلب قائمة الفصول الدراسية بنجاح."),
         "retrieve": ("TERM_RETRIEVED", "تم جلب الفصل الدراسي بنجاح."),
@@ -149,7 +185,7 @@ class TermViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Model
             )
 
 
-class GradeLevelViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class GradeLevelViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
     response_messages = {
         "list": ("GRADE_LEVELS_RETRIEVED", "تم جلب قائمة الصفوف الدراسية بنجاح."),
         "retrieve": ("GRADE_LEVEL_RETRIEVED", "تم جلب الصف الدراسي بنجاح."),
@@ -205,7 +241,7 @@ class GradeLevelViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets
             )
 
 
-class SectionViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class SectionViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
     response_messages = {
         "list": ("SECTIONS_RETRIEVED", "تم جلب قائمة الشعب بنجاح."),
         "retrieve": ("SECTION_RETRIEVED", "تم جلب الشعبة بنجاح."),
@@ -266,7 +302,7 @@ class SectionViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Mo
             )
 
 
-class SubjectViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class SubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
     response_messages = {
         "list": ("SUBJECTS_RETRIEVED", "تم جلب قائمة المواد بنجاح."),
         "retrieve": ("SUBJECT_RETRIEVED", "تم جلب المادة بنجاح."),
@@ -324,7 +360,7 @@ class SubjectViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.Mo
             )
 
 
-class GradeSubjectViewSet(ArabicApiResponseMixin, AuditModelViewSetMixin, viewsets.ModelViewSet):
+class GradeSubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
     response_messages = {
         "list": ("GRADE_SUBJECTS_RETRIEVED", "تم جلب الخطة الدراسية بنجاح."),
         "retrieve": ("GRADE_SUBJECT_RETRIEVED", "تم جلب مادة الخطة الدراسية بنجاح."),

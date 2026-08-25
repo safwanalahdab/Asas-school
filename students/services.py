@@ -5,7 +5,7 @@ from academics.models import Section
 
 from .models import Enrollment, StudentAuditLog
 from audit_logs.models import AuditLog
-from audit_logs.services import log_event
+from audit_logs.services import get_actor_display, record_audit_event
 
 
 @transaction.atomic
@@ -80,13 +80,13 @@ def transfer_student_between_sections(
         new_section=target_section,
     )
 
-    log_event(
-        actor=actor,
+    actor_name = get_actor_display(actor)
+    record_audit_event(
+        actor=actor, module=AuditLog.Module.STUDENTS,
         action=AuditLog.Action.TRANSFER,
-        instance=locked_enrollment,
-        changes={
-            "section": {"before": old_section.pk, "after": target_section.pk}
-        },
+        message=f"نقل {actor_name} الطالب {locked_enrollment.student.full_name} من الشعبة {old_section} إلى الشعبة {target_section}.",
+        target=locked_enrollment,
+        metadata={"old_section": str(old_section), "new_section": str(target_section)},
     )
 
     return locked_enrollment

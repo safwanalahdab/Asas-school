@@ -90,4 +90,5 @@ urlpatterns = [
         "api/v1/grades/",
         include("grades.urls"),
     ),
+    path("api/v1/", include("audit_logs.urls")),
 ]

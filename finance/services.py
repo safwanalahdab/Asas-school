@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
+from audit_logs.models import AuditLog
+from audit_logs.services import get_actor_display, record_audit_event
 
 from rest_framework.exceptions import ValidationError
 
@@ -508,7 +510,7 @@ def create_student_discount(
             }
         )
 
-    return StudentDiscount.objects.create(
+    discount = StudentDiscount.objects.create(
         account=locked_account,
         discount_type=discount_type,
         value=value,
@@ -520,6 +522,14 @@ def create_student_discount(
         reason=reason,
         created_by=actor,
     )
+    student_name = locked_account.enrollment.student.full_name
+    record_audit_event(
+        actor=actor, module=AuditLog.Module.FINANCE, action=AuditLog.Action.CREATE,
+        message=f"أضاف {get_actor_display(actor)} خصمًا للطالب {student_name} بقيمة {value}.",
+        target=discount,
+        metadata={"student": student_name, "discount_type": discount_type, "value": value, "currency": currency},
+    )
+    return discount
 
 
 @transaction.atomic
@@ -584,6 +594,14 @@ def cancel_student_discount(
             "cancelled_by",
             "cancelled_at",
         ]
+    )
+
+    student_name = locked_discount.account.enrollment.student.full_name
+    record_audit_event(
+        actor=actor, module=AuditLog.Module.FINANCE, action=AuditLog.Action.CANCEL,
+        message=f"ألغى {get_actor_display(actor)} خصم الطالب {student_name}.",
+        target=locked_discount,
+        metadata={"student": student_name, "cancellation_reason": cancellation_reason},
     )
 
     return locked_discount
@@ -682,7 +700,7 @@ def record_payment(
             }
         )
 
-    return Payment.objects.create(
+    payment = Payment.objects.create(
         account=locked_account,
         currency=currency,
         amount=amount,
@@ -692,6 +710,14 @@ def record_payment(
         equivalent_usd=equivalent_usd,
         recorded_by=actor,
     )
+    student_name = locked_account.enrollment.student.full_name
+    record_audit_event(
+        actor=actor, module=AuditLog.Module.FINANCE, action=AuditLog.Action.CREATE,
+        message=f"أضاف {get_actor_display(actor)} دفعة بقيمة {amount} {currency.upper()} للطالب {student_name}.",
+        target=payment,
+        metadata={"student": student_name, "amount": amount, "currency": currency, "equivalent_usd": equivalent_usd},
+    )
+    return payment
 
 
 @transaction.atomic
@@ -756,6 +782,14 @@ def cancel_payment(
             "cancelled_by",
             "cancelled_at",
         ]
+    )
+
+    student_name = locked_payment.account.enrollment.student.full_name
+    record_audit_event(
+        actor=actor, module=AuditLog.Module.FINANCE, action=AuditLog.Action.CANCEL,
+        message=f"ألغى {get_actor_display(actor)} دفعة الطالب {student_name}.",
+        target=locked_payment,
+        metadata={"student": student_name, "amount": locked_payment.amount, "currency": locked_payment.currency, "cancellation_reason": cancellation_reason},
     )
 
     return locked_payment

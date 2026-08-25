@@ -5,9 +5,9 @@ from .models import AuditLog
 
 @admin.register(AuditLog)
 class AuditLogAdmin(admin.ModelAdmin):
-    list_display = ("actor", "action", "resource_type", "resource_display", "created_at")
-    list_filter = ("action", "resource_type", "created_at")
-    search_fields = ("actor__username", "resource_type", "resource_id", "resource_display")
+    list_display = ("created_at", "actor_display", "module", "action", "target_display")
+    list_filter = ("module", "action", "created_at")
+    search_fields = ("actor_display", "message", "target_display", "target_id")
     readonly_fields = tuple(field.name for field in AuditLog._meta.fields)
     ordering = ("-created_at",)
 
