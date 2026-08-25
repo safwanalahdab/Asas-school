@@ -19,8 +19,28 @@ class AttendanceRecordInputSerializer(serializers.Serializer):
     notes = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
-        normalize_and_validate_record(attrs, final=True)
+        normalize_and_validate_record(attrs, final=True, morning=True)
         return attrs
+
+
+class AttendanceRosterSerializer(serializers.ModelSerializer):
+    enrollment = serializers.UUIDField(source="id", read_only=True)
+    student = serializers.UUIDField(source="student_id", read_only=True)
+    student_display = serializers.CharField(source="student.full_name", read_only=True)
+    usual_arrival_method_display = serializers.CharField(source="get_usual_arrival_method_display", read_only=True)
+    usual_departure_method_display = serializers.CharField(source="get_usual_departure_method_display", read_only=True)
+
+    class Meta:
+        model = Enrollment
+        fields = (
+            "enrollment", "student", "student_display",
+            "usual_arrival_method", "usual_arrival_method_display",
+            "usual_departure_method", "usual_departure_method_display",
+        )
+
+
+class AttendanceRosterQuerySerializer(serializers.Serializer):
+    section = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all())
 
 
 class AttendanceRecordSerializer(serializers.ModelSerializer):

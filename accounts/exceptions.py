@@ -50,7 +50,17 @@ def _explicit_metadata(data):
     if not isinstance(data, dict):
         return None, None, data
     data = data.copy()
-    return data.pop("code", None), data.pop("message", data.pop("detail", None)), data
+    code = _metadata_scalar(data.pop("code", None))
+    message = _metadata_scalar(data.pop("message", data.pop("detail", None)))
+    return code, message, data
+
+
+def _metadata_scalar(value):
+    if isinstance(value, (ErrorDetail, str)):
+        return str(value)
+    if isinstance(value, (list, tuple)) and len(value) == 1:
+        return _metadata_scalar(value[0])
+    return None
 
 
 def api_exception_handler(exc, context):

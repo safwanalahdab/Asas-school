@@ -4,16 +4,50 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, ErrorDetail, ValidationError
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.policies import can_create_role
 from accounts.serializers import WebLoginSerializer, WebTokenRefreshSerializer
 from accounts.services import assign_temporary_password, generate_temporary_password
+from accounts.exceptions import api_exception_handler
 
 
 User = get_user_model()
+
+
+class ApiExceptionHandlerTests(TestCase):
+    def handle(self, detail):
+        exception = ValidationError()
+        exception.detail = detail
+        return api_exception_handler(exception, {"request": None})
+
+    def test_scalar_explicit_validation_metadata(self):
+        response = self.handle({
+            "code": ErrorDetail("ATTENDANCE_RECORD_INVALID", code="invalid"),
+            "detail": ErrorDetail("رسالة واضحة.", code="invalid"),
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "ATTENDANCE_RECORD_INVALID")
+        self.assertEqual(response.data["message"], "رسالة واضحة.")
+
+    def test_single_item_wrapped_explicit_validation_metadata(self):
+        response = self.handle({
+            "code": [ErrorDetail("ATTENDANCE_RECORD_INVALID", code="invalid")],
+            "detail": [ErrorDetail("سبب الغياب ومصدره مطلوبان للغياب بعذر.", code="invalid")],
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "ATTENDANCE_RECORD_INVALID")
+        self.assertEqual(response.data["message"], "سبب الغياب ومصدره مطلوبان للغياب بعذر.")
+
+    def test_normal_field_validation_remains_under_errors(self):
+        response = self.handle({
+            "username": [ErrorDetail("This field is required.", code="required")]
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "VALIDATION_ERROR")
+        self.assertEqual(response.data["errors"]["username"], ["هذا الحقل مطلوب."])
 
 
 class PasswordLifecycleTests(TestCase):

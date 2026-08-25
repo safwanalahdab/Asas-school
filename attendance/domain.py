@@ -10,7 +10,7 @@ ATTENDANCE_FIELDS = (
 )
 
 
-def normalize_and_validate_record(data, *, current=None, final=False):
+def normalize_and_validate_record(data, *, current=None, final=False, morning=False):
     values = {field: getattr(current, field, None) for field in ATTENDANCE_FIELDS}
     values.update(data)
     for field in ("arrival_method", "departure_method", "absence_type", "absence_reason", "absence_reason_source", "notes"):
@@ -18,15 +18,35 @@ def normalize_and_validate_record(data, *, current=None, final=False):
             values[field] = ""
     status = values.get("status") or AttendanceRecord.Status.UNMARKED
 
+    if morning:
+        values["departure_time"] = None
+        values["departure_method"] = ""
+
     if status == AttendanceRecord.Status.UNMARKED:
         if final:
             raise ValidationError({"code": "ATTENDANCE_RECORD_INVALID", "detail": "يجب تحديد حالة كل طالب قبل حفظ الكشف."})
         for field in ATTENDANCE_FIELDS[1:-1]:
             values[field] = None if field.endswith("_time") else ""
     elif status == AttendanceRecord.Status.PRESENT:
+        changing_from_absent = (
+            current is not None
+            and current.status == AttendanceRecord.Status.ABSENT
+            and data.get("status") == AttendanceRecord.Status.PRESENT
+        )
+        if changing_from_absent and not any(
+            data.get(field)
+            for field in ("absence_type", "absence_reason", "absence_reason_source")
+        ):
+            values["absence_type"] = ""
+            values["absence_reason"] = ""
+            values["absence_reason_source"] = ""
         if any(values.get(field) for field in ("absence_type", "absence_reason", "absence_reason_source")):
             raise ValidationError({"code": "ATTENDANCE_RECORD_INVALID", "detail": "لا يمكن إضافة بيانات غياب لطالب حاضر."})
     elif status == AttendanceRecord.Status.ABSENT:
+        values["arrival_time"] = None
+        values["arrival_method"] = ""
+        values["departure_time"] = None
+        values["departure_method"] = ""
         if not values.get("absence_type"):
             raise ValidationError({"code": "ATTENDANCE_RECORD_INVALID", "detail": "نوع الغياب مطلوب للطالب الغائب."})
         if any(values.get(field) for field in ("arrival_time", "arrival_method", "departure_time", "departure_method")):

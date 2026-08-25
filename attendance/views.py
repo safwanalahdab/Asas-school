@@ -1,4 +1,5 @@
-from django.db.models import F, Prefetch, Q
+from django.db.models import Prefetch
+from django.utils import timezone
 
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
@@ -17,6 +18,8 @@ from .models import AttendanceRecord, AttendanceSheet
 from .permissions import AttendanceRecordPermission, AttendanceSheetPermission
 from .serializers import (
     AttendanceRecordSerializer,
+    AttendanceRosterQuerySerializer,
+    AttendanceRosterSerializer,
     AttendanceSheetCreateSerializer,
     AttendanceSheetSerializer,
     BulkAttendanceUpdateSerializer,
@@ -26,6 +29,7 @@ from .services import (
     apply_normal_departure,
     bulk_update_attendance,
     create_attendance_sheet,
+    get_effective_attendance_roster,
     update_attendance_record,
 )
 
@@ -49,6 +53,10 @@ class AttendanceSheetViewSet(
         "normal_departure": (
             "ATTENDANCE_DEPARTURE_RECORDED",
             "تم تسجيل المغادرة الطبيعية بنجاح.",
+        ),
+        "roster": (
+            "ATTENDANCE_ROSTER_RETRIEVED",
+            "تم جلب قائمة طلاب الشعبة للحضور بنجاح.",
         ),
     }
 
@@ -121,23 +129,6 @@ class AttendanceSheetViewSet(
         }:
             return queryset
 
-        if user.role == User.Role.TEACHER:
-            return queryset.filter(
-                section__teacher_assignments__teacher=user,
-                section__teacher_assignments__start_date__lte=F(
-                    "attendance_date",
-                ),
-            ).filter(
-                Q(
-                    section__teacher_assignments__end_date__isnull=True,
-                )
-                | Q(
-                    section__teacher_assignments__end_date__gte=F(
-                        "attendance_date",
-                    ),
-                )
-            ).distinct()
-
         return queryset.none()
 
     def get_serializer_class(self):
@@ -177,6 +168,20 @@ class AttendanceSheetViewSet(
         )
 
     @extend_schema(
+        parameters=[AttendanceRosterQuerySerializer],
+        responses={status.HTTP_200_OK: AttendanceRosterSerializer(many=True)},
+    )
+    @action(detail=False, methods=["get"], url_path="roster")
+    def roster(self, request):
+        query_serializer = AttendanceRosterQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        roster = get_effective_attendance_roster(
+            section=query_serializer.validated_data["section"],
+            attendance_date=timezone.localdate(),
+        )
+        return Response(AttendanceRosterSerializer(roster, many=True).data)
+
+    @extend_schema(
         request=BulkAttendanceUpdateSerializer,
         responses={
             status.HTTP_200_OK: AttendanceSheetSerializer,
@@ -201,6 +206,7 @@ class AttendanceSheetViewSet(
         bulk_update_attendance(
             sheet=sheet,
             items=serializer.validated_data["records"],
+            actor=request.user,
         )
 
         records_queryset = AttendanceRecord.objects.select_related(
@@ -254,6 +260,7 @@ class AttendanceSheetViewSet(
 
         apply_normal_departure(
             sheet=sheet,
+            actor=request.user,
             **serializer.validated_data,
         )
 
@@ -351,23 +358,6 @@ class AttendanceRecordViewSet(
             User.Role.SCHOOL_ADMIN,
         }:
             return queryset
-
-        if user.role == User.Role.TEACHER:
-            return queryset.filter(
-                sheet__section__teacher_assignments__teacher=user,
-                sheet__section__teacher_assignments__start_date__lte=F(
-                    "sheet__attendance_date",
-                ),
-            ).filter(
-                Q(
-                    sheet__section__teacher_assignments__end_date__isnull=True,
-                )
-                | Q(
-                    sheet__section__teacher_assignments__end_date__gte=F(
-                        "sheet__attendance_date",
-                    ),
-                )
-            ).distinct()
 
         return queryset.none()
 

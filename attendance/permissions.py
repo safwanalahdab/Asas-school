@@ -1,8 +1,7 @@
 from rest_framework.permissions import BasePermission
 from accounts.models import User
 
-ATTENDANCE_ROLES = {User.Role.TEACHER, User.Role.SUPERVISOR, User.Role.SCHOOL_ADMIN}
-ADMIN_ROLES = {User.Role.SUPERVISOR, User.Role.SCHOOL_ADMIN}
+READ_ROLES = {User.Role.SUPERVISOR, User.Role.SCHOOL_ADMIN}
 
 
 class AttendanceSheetPermission(BasePermission):
@@ -13,11 +12,11 @@ class AttendanceSheetPermission(BasePermission):
             return False
         if user.is_superuser:
             return True
-        if user.role not in ATTENDANCE_ROLES:
-            return False
-        if view.action in {"bulk_update", "normal_departure"}:
-            return user.role in ADMIN_ROLES
-        return view.action in {"list", "retrieve", "create"}
+        if view.action in {"list", "retrieve", "roster"}:
+            return user.role in READ_ROLES
+        if view.action in {"create", "bulk_update", "normal_departure"}:
+            return user.role in READ_ROLES
+        return False
 
 
 class AttendanceRecordPermission(BasePermission):
@@ -28,8 +27,8 @@ class AttendanceRecordPermission(BasePermission):
             return False
         if user.is_superuser:
             return True
-        if user.role not in ATTENDANCE_ROLES:
-            return False
+        if view.action in {"list", "retrieve"}:
+            return user.role in READ_ROLES
         if view.action == "partial_update":
-            return user.role in ADMIN_ROLES
-        return view.action in {"list", "retrieve"}
+            return user.role in READ_ROLES
+        return False
