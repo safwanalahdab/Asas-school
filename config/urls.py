@@ -91,4 +91,8 @@ urlpatterns = [
         include("grades.urls"),
     ),
     path("api/v1/", include("audit_logs.urls")),
+    path(
+        "api/v1/mobile/",
+        include("students.mobile_urls"),
+    ),
 ]

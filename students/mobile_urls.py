@@ -1,0 +1,31 @@
+from django.urls import include, path
+
+from .mobile_views import (
+    MobileChildDetailView,
+    MobileChildrenListView,
+)
+
+
+app_name = "students-mobile"
+
+
+urlpatterns = [
+    path(
+        "children/",
+        MobileChildrenListView.as_view(),
+        name="children-list",
+    ),
+    path(
+        "children/<uuid:student_id>/",
+        MobileChildDetailView.as_view(),
+        name="children-detail",
+    ),
+    path(
+        "children/<uuid:student_id>/homework/",
+        include("homework.mobile_urls"),
+    ),
+    path(
+        "children/<uuid:student_id>/announcements/",
+        include("announcements.mobile_urls"),
+    ),
+]
