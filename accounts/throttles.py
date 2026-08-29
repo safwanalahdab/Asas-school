@@ -8,4 +8,9 @@ class WebLoginRateThrottle(AnonRateThrottle):
 
     scope = "web_login"
 
-    
+
+class MobileLoginRateThrottle(AnonRateThrottle):
+    """Rate limit Guardian mobile login attempts independently from Web login."""
+
+    scope = "mobile_login"
+

@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import include, path
 
 from accounts.views import (
     WebChangePasswordView,
@@ -13,6 +13,7 @@ from accounts.views import (
 app_name = "accounts_auth"
 
 urlpatterns = [
+    path("mobile/", include("accounts.mobile_auth_urls")),
     path("web/csrf/", WebCsrfView.as_view(), name="web-csrf"),
     path("web/login/", WebLoginView.as_view(), name="web-login"),
     path("web/refresh/", WebTokenRefreshView.as_view(), name="web-refresh"),

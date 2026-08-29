@@ -300,6 +300,7 @@ REST_FRAMEWORK = {
     # معدل محاولات تسجيل الدخول.
     "DEFAULT_THROTTLE_RATES": {
         "web_login": "5/minute",
+        "mobile_login": "5/minute",
     },
 }
 
