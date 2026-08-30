@@ -32,4 +32,12 @@ urlpatterns = [
         "children/<uuid:student_id>/grades/",
         include("grades.mobile_urls"),
     ),
+    path(
+        "children/<uuid:student_id>/attendance/",
+        include("attendance.mobile_urls"),
+    ),
+    path(
+        "children/<uuid:student_id>/behavior/",
+        include("behavior.mobile_urls"),
+    ),
 ]

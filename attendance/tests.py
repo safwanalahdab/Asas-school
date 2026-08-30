@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from unittest.mock import patch
 
 from django.db import IntegrityError, transaction
@@ -381,23 +381,34 @@ class AttendanceAuditTests(AttendanceFixture):
         sheet, first = self.sheet_with_record()
         second_record = AttendanceRecord.objects.create(sheet=sheet, enrollment=enrollment, status="present")
         first_updated_at = first.updated_at
-        second_updated_at = second_record.updated_at
-        bulk_update_attendance(
-            sheet=sheet, actor=self.supervisor,
-            items=[{"id": first.pk, "notes": ""}, {"id": second_record.pk, "notes": "two"}],
+        old_timestamp = timezone.now() - timedelta(minutes=5)
+        AttendanceRecord.objects.filter(pk=second_record.pk).update(
+            updated_at=old_timestamp
         )
+        second_record.refresh_from_db()
+        second_updated_at = second_record.updated_at
+        new_timestamp = old_timestamp + timedelta(minutes=1)
+        with patch("attendance.services.timezone.now", return_value=new_timestamp):
+            bulk_update_attendance(
+                sheet=sheet, actor=self.supervisor,
+                items=[{"id": first.pk, "notes": ""}, {"id": second_record.pk, "notes": "two"}],
+            )
         self.assertEqual(self.attendance_audits().count(), 1)
         self.assertEqual(self.attendance_audits().get().metadata["changed_count"], 1)
         first.refresh_from_db()
         second_record.refresh_from_db()
         self.assertEqual(first.updated_at, first_updated_at)
+        self.assertEqual(second_record.notes, "two")
+        self.assertEqual(second_record.updated_at, new_timestamp)
         self.assertGreater(second_record.updated_at, second_updated_at)
         self.attendance_audits().delete()
         no_op_updated_at = second_record.updated_at
-        bulk_update_attendance(
-            sheet=sheet, actor=self.supervisor,
-            items=[{"id": second_record.pk, "notes": "two"}],
-        )
+        later_timestamp = new_timestamp + timedelta(minutes=1)
+        with patch("attendance.services.timezone.now", return_value=later_timestamp):
+            bulk_update_attendance(
+                sheet=sheet, actor=self.supervisor,
+                items=[{"id": second_record.pk, "notes": "two"}],
+            )
         second_record.refresh_from_db()
         self.assertEqual(second_record.updated_at, no_op_updated_at)
         self.assertEqual(self.attendance_audits().count(), 0)
