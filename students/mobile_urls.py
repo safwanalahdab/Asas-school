@@ -40,4 +40,8 @@ urlpatterns = [
         "children/<uuid:student_id>/behavior/",
         include("behavior.mobile_urls"),
     ),
+    path(
+        "children/<uuid:student_id>/finance/",
+        include("finance.mobile_urls"),
+    ),
 ]
