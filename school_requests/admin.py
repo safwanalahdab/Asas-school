@@ -49,7 +49,6 @@ class SchoolRequestAdmin(admin.ModelAdmin):
         "guardian",
         "student",
         "status",
-        "school_response",
         "handled_by",
         "answered_at",
         "created_at",

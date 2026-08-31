@@ -11,6 +11,10 @@ app_name = "students-mobile"
 
 urlpatterns = [
     path(
+        "requests/",
+        include("school_requests.mobile_urls"),
+    ),
+    path(
         "children/",
         MobileChildrenListView.as_view(),
         name="children-list",

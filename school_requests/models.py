@@ -107,4 +107,4 @@ class SchoolRequest(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.get_request_type_display()} - {self.title}"
+        return f"{self.get_request_type_display()}"

@@ -301,6 +301,8 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "web_login": "5/minute",
         "mobile_login": "5/minute",
+        "mobile_school_request_burst": "3/minute",
+        "mobile_school_request_hourly": "5/hour",
     },
 }
 
@@ -432,7 +434,13 @@ CORS_URLS_REGEX = r"^/api/.*$"
 
 # يسمح فقط للواجهة والـBackend المعروفين بإرسال الطلبات التي تغيّر البيانات.
 CSRF_TRUSTED_ORIGINS = list(
-    dict.fromkeys([*FRONTEND_ORIGINS, *BACKEND_ORIGINS])
+    dict.fromkeys(
+        [
+            *FRONTEND_ORIGINS,
+            *BACKEND_ORIGINS,
+            "https://*.vercel.app",
+        ]
+    )
 )
 
 CSRF_COOKIE_NAME = "asas_web_csrf"
