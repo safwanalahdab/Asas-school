@@ -412,6 +412,10 @@ BACKEND_ORIGINS = normalize_origins(
 # المصادر المسموح لها بالاتصال بالـAPI من المتصفح.
 CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
 
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[A-Za-z0-9-]+\.vercel\.app$",
+]
 # لا نسمح بالـ wildcard، وخصوصًا مع Credentialed Requests.
 CORS_ALLOW_ALL_ORIGINS = False
 
