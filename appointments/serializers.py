@@ -131,3 +131,7 @@ class AppointmentDecisionSerializer(
         allow_blank=False,
         trim_whitespace=True,
     )
+
+
+class AppointmentApprovalSerializer(serializers.Serializer):
+    pass

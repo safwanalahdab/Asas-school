@@ -31,10 +31,7 @@ class CanAccessAppointments(BasePermission):
                 "reject",
             }
 
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SECRETARIAT,
-        }:
+        if user.role == User.Role.SCHOOL_ADMIN:
             return action in {
                 "list",
                 "retrieve",
@@ -42,11 +39,10 @@ class CanAccessAppointments(BasePermission):
                 "reject",
             }
 
-        if user.role == User.Role.GUARDIAN:
+        if user.role == User.Role.SECRETARIAT:
             return action in {
                 "list",
                 "retrieve",
-                "create",
             }
 
         return False
@@ -71,20 +67,14 @@ class CanAccessAppointments(BasePermission):
                 "reject",
             }
 
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SECRETARIAT,
-        }:
+        if user.role == User.Role.SCHOOL_ADMIN:
             return action in {
                 "retrieve",
                 "approve",
                 "reject",
             }
 
-        if user.role == User.Role.GUARDIAN:
-            return (
-                action == "retrieve"
-                and obj.guardian_id == user.id
-            )
+        if user.role == User.Role.SECRETARIAT:
+            return action == "retrieve"
 
         return False

@@ -11,6 +11,10 @@ app_name = "students-mobile"
 
 urlpatterns = [
     path(
+        "appointments/",
+        include("appointments.mobile_urls"),
+    ),
+    path(
         "requests/",
         include("school_requests.mobile_urls"),
     ),

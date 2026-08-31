@@ -43,30 +43,9 @@ class AppointmentRequestAdmin(admin.ModelAdmin):
         "guardian",
         "requested_date",
         "request_reason",
-        "status",
-        "decision_reason",
         "decided_by",
         "decided_at",
         "created_at",
         "updated_at",
     )
 
-    def has_add_permission(
-        self,
-        request,
-    ):
-        return False
-
-    def has_change_permission(
-        self,
-        request,
-        obj=None,
-    ):
-        return False
-
-    def has_delete_permission(
-        self,
-        request,
-        obj=None,
-    ):
-        return False

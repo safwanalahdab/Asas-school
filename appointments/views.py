@@ -18,6 +18,7 @@ from .filters import AppointmentRequestFilter
 from .models import AppointmentRequest
 from .permissions import CanAccessAppointments
 from .serializers import (
+    AppointmentApprovalSerializer,
     AppointmentDecisionSerializer,
     AppointmentRequestSerializer,
 )
@@ -93,10 +94,10 @@ class AppointmentRequestViewSet(
     }
 
     def get_serializer_class(self):
-        if self.action in {
-            "approve",
-            "reject",
-        }:
+        if self.action == "approve":
+            return AppointmentApprovalSerializer
+
+        if self.action == "reject":
             return AppointmentDecisionSerializer
 
         return AppointmentRequestSerializer
@@ -108,16 +109,8 @@ class AppointmentRequestViewSet(
         if user.is_superuser:
             return queryset
 
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SECRETARIAT,
-        }:
+        if user.role in {User.Role.SCHOOL_ADMIN, User.Role.SECRETARIAT}:
             return queryset
-
-        if user.role == User.Role.GUARDIAN:
-            return queryset.filter(
-                guardian=user,
-            )
 
         return queryset.none()
 
@@ -131,7 +124,7 @@ class AppointmentRequestViewSet(
         )
 
     @extend_schema(
-        request=AppointmentDecisionSerializer,
+        request=AppointmentApprovalSerializer,
         responses=AppointmentRequestSerializer,
     )
     @action(
@@ -157,9 +150,6 @@ class AppointmentRequestViewSet(
         appointment = approve_appointment_request(
             appointment=appointment,
             actor=request.user,
-            decision_reason=serializer.validated_data[
-                "decision_reason"
-            ],
         )
 
         response_serializer = AppointmentRequestSerializer(

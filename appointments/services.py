@@ -26,12 +26,7 @@ def approve_appointment_request(
     *,
     appointment,
     actor,
-    decision_reason,
 ):
-    decision_reason = _validate_decision_reason(
-        decision_reason
-    )
-
     locked_appointment = (
         AppointmentRequest.objects
         .select_for_update()
@@ -57,9 +52,7 @@ def approve_appointment_request(
     locked_appointment.status = (
         AppointmentRequest.Status.APPROVED
     )
-    locked_appointment.decision_reason = (
-        decision_reason
-    )
+    locked_appointment.decision_reason = ""
     locked_appointment.decided_by = actor
     locked_appointment.decided_at = decision_time
 

@@ -97,11 +97,9 @@ class AppointmentRequest(models.Model):
                     | (
                         models.Q(
                             status="approved",
+                            decision_reason="",
                             decided_by__isnull=False,
                             decided_at__isnull=False,
-                        )
-                        & ~models.Q(
-                            decision_reason="",
                         )
                     )
                     | (
