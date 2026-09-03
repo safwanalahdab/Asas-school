@@ -19,6 +19,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
     DEBUG=(bool, False),
+    MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN=(int, 2),
+    FIREBASE_PUSH_ENABLED=(bool, False),
 )
 
 environ.Env.read_env(
@@ -130,6 +132,7 @@ INSTALLED_APPS = [
     "appointments",
     "dashboard",
     "grades",
+    "notifications",
 
 ]
 
@@ -303,8 +306,22 @@ REST_FRAMEWORK = {
         "mobile_login": "5/minute",
         "mobile_school_request_burst": "3/minute",
         "mobile_school_request_hourly": "5/hour",
+        "mobile_device_registration": "10/minute",
+        "mobile_device_unregistration": "10/minute",
     },
 }
+
+MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN = env.int(
+    "MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN",
+    default=2,
+)
+if MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN < 1:
+    raise ImproperlyConfigured(
+        "MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN must be at least 1."
+    )
+
+FIREBASE_PUSH_ENABLED = env.bool("FIREBASE_PUSH_ENABLED", default=False)
+FIREBASE_PROJECT_ID = env("FIREBASE_PROJECT_ID", default="").strip()
 
 
 # =========================================================

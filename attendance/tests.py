@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta
 from unittest.mock import patch
 
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
@@ -10,7 +10,8 @@ from rest_framework.test import APIClient
 from academics.models import AcademicYear, GradeLevel, Section
 from accounts.models import User
 from audit_logs.models import AuditLog
-from students.models import Enrollment, Student, StudentAuditLog
+from notifications.models import Notification
+from students.models import Enrollment, GuardianStudent, Student, StudentAuditLog
 
 from .domain import normalize_and_validate_record
 from .models import AttendanceRecord, AttendanceSheet
@@ -78,6 +79,70 @@ class AttendanceFixture(TestCase):
 
     def local_datetime(self, target_date, hour):
         return timezone.make_aware(datetime.combine(target_date, time(hour)), timezone.get_current_timezone())
+
+
+class AttendanceNotificationTests(AttendanceFixture):
+    def setUp(self):
+        super().setUp()
+        GuardianStudent.objects.create(guardian=self.guardian, student=self.student)
+
+    @patch("attendance.services.timezone.localdate", return_value=date(2026, 8, 16))
+    def test_final_absence_notifies_but_present_does_not(self, _localdate):
+        create_attendance_sheet(
+            section=self.section_a, actor=self.supervisor,
+            records=self.payload(
+                status=AttendanceRecord.Status.ABSENT,
+                absence_type=AttendanceRecord.AbsenceType.UNEXCUSED,
+                absence_reason="private reason",
+            ),
+        )
+        notification = Notification.objects.get()
+        record = AttendanceRecord.objects.get()
+        self.assertEqual(notification.recipient, self.guardian)
+        self.assertEqual(notification.student, self.student)
+        self.assertEqual(notification.resource_id, record.id)
+        self.assertEqual(notification.event_key, f"attendance:{record.id}:absent")
+        self.assertNotIn("private reason", notification.body)
+
+    def test_correction_back_to_absent_does_not_duplicate(self):
+        _sheet, record = self.sheet_with_record()
+        update_attendance_record(
+            record=record,
+            data={"status": AttendanceRecord.Status.ABSENT,
+                  "absence_type": AttendanceRecord.AbsenceType.UNEXCUSED},
+        )
+        update_attendance_record(record=record, data={"status": AttendanceRecord.Status.PRESENT})
+        update_attendance_record(
+            record=record,
+            data={"status": AttendanceRecord.Status.ABSENT,
+                  "absence_type": AttendanceRecord.AbsenceType.UNEXCUSED},
+        )
+        self.assertEqual(Notification.objects.count(), 1)
+
+    def test_absence_without_active_guardian_still_succeeds(self):
+        self.guardian.is_active = False
+        self.guardian.save(update_fields=["is_active"])
+        _sheet, record = self.sheet_with_record()
+        updated = update_attendance_record(
+            record=record,
+            data={"status": AttendanceRecord.Status.ABSENT,
+                  "absence_type": AttendanceRecord.AbsenceType.UNEXCUSED},
+        )
+        self.assertEqual(updated.status, AttendanceRecord.Status.ABSENT)
+        self.assertFalse(Notification.objects.exists())
+
+    @override_settings(FIREBASE_PUSH_ENABLED=True)
+    @patch("notifications.push_services.send_notification_push", side_effect=RuntimeError("firebase down"))
+    def test_firebase_failure_does_not_break_absence_update(self, _send):
+        _sheet, record = self.sheet_with_record()
+        with self.captureOnCommitCallbacks(execute=True):
+            updated = update_attendance_record(
+                record=record,
+                data={"status": AttendanceRecord.Status.ABSENT,
+                      "absence_type": AttendanceRecord.AbsenceType.UNEXCUSED},
+            )
+        self.assertEqual(updated.status, AttendanceRecord.Status.ABSENT)
+        self.assertEqual(Notification.objects.count(), 1)
 
 
 class PermissionMatrixTests(AttendanceFixture):

@@ -34,3 +34,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Local Firebase credentials
+firebase-service-account*.json

@@ -9,6 +9,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from academics.models import Section
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
+from notifications.services import create_notification
+from students.models import GuardianStudent
 from teaching.models import TeacherAssignment
 
 from .models import Assessment, AssessmentSection, ScoreAuditLog, StudentScore
@@ -239,14 +241,65 @@ def _ensure_can_publish(actor):
         raise PermissionDenied({"code": "GRADES_PUBLISH_DENIED", "detail": "نشر النتائج متاح للإدارة والموجّه التربوي فقط."})
 
 
+def _notify_published_assessment_sections(links):
+    links_by_scope = {
+        (link.assessment_id, link.section_id): link
+        for link in links
+    }
+    if not links_by_scope:
+        return
+
+    scores = StudentScore.objects.filter(
+        assessment_id__in={scope[0] for scope in links_by_scope},
+        recorded_section_id__in={scope[1] for scope in links_by_scope},
+        score__isnull=False,
+        enrollment__student__is_active=True,
+    ).select_related("enrollment__student")
+    scores = [
+        score for score in scores
+        if (score.assessment_id, score.recorded_section_id) in links_by_scope
+    ]
+    guardian_links = {
+        link.student_id: link
+        for link in GuardianStudent.objects.filter(
+            student_id__in={score.enrollment.student_id for score in scores},
+            student__is_active=True,
+            guardian__is_active=True,
+            guardian__role=User.Role.GUARDIAN,
+            is_active=True,
+        ).select_related("guardian", "student")
+    }
+
+    for score in scores:
+        assessment_link = links_by_scope[
+            (score.assessment_id, score.recorded_section_id)
+        ]
+        guardian_link = guardian_links.get(score.enrollment.student_id)
+        if guardian_link is None:
+            continue
+        create_notification(
+            recipient=guardian_link.guardian,
+            notification_type="grades",
+            title="تم نشر علامات جديدة",
+            body="تم نشر علامات جديدة للطالب. يمكنك مراجعة النتائج داخل التطبيق.",
+            student=guardian_link.student,
+            resource_type="grades",
+            resource_id=assessment_link.id,
+            event_key=(
+                f"grade_publish:{assessment_link.id}:student:"
+                f"{guardian_link.student_id}"
+            ),
+        )
+
+
 @transaction.atomic
 def publish_section_assessments(*, section, term, actor):
     _ensure_can_publish(actor)
     if section.academic_year_id != term.academic_year_id:
         raise ValidationError({"term": "الفصل الدراسي لا يتبع سنة الشعبة."})
     now, today = timezone.now(), timezone.localdate()
-    links = AssessmentSection.objects.select_for_update().filter(section=section, assessment__term=term, assessment__assessment_date__lte=today, status=AssessmentSection.Status.DRAFT)
-    count = links.update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
+    links = list(AssessmentSection.objects.select_for_update().filter(section=section, assessment__term=term, assessment__assessment_date__lte=today, status=AssessmentSection.Status.DRAFT))
+    count = AssessmentSection.objects.filter(pk__in=[link.pk for link in links]).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     future = AssessmentSection.objects.filter(section=section, assessment__term=term, assessment__assessment_date__gt=today, status=AssessmentSection.Status.DRAFT).count()
     if count:
         record_audit_event(
@@ -255,6 +308,7 @@ def publish_section_assessments(*, section, term, actor):
             target=section,
             metadata={"section": str(section), "term": str(term), "published_count": count, "skipped_future_count": future},
         )
+        _notify_published_assessment_sections(links)
     return {"published_count": count, "skipped_future_count": future}
 
 
@@ -264,7 +318,8 @@ def publish_grade_assessments(*, grade_level, term, actor):
     now, today = timezone.now(), timezone.localdate()
     base = AssessmentSection.objects.select_for_update().filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT)
     future = base.filter(assessment__assessment_date__gt=today).count()
-    count = base.filter(assessment__assessment_date__lte=today).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
+    links = list(base.filter(assessment__assessment_date__lte=today))
+    count = AssessmentSection.objects.filter(pk__in=[link.pk for link in links]).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     if count:
         record_audit_event(
             actor=actor, module=AuditLog.Module.GRADES, action=AuditLog.Action.PUBLISH,
@@ -272,4 +327,5 @@ def publish_grade_assessments(*, grade_level, term, actor):
             target=grade_level,
             metadata={"grade_level": str(grade_level), "term": str(term), "published_count": count, "skipped_future_count": future},
         )
+        _notify_published_assessment_sections(links)
     return {"published_count": count, "skipped_future_count": future}

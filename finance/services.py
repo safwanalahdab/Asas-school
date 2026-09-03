@@ -4,10 +4,11 @@ from django.db import transaction
 from django.utils import timezone
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
+from notifications.services import create_notification
 
 from rest_framework.exceptions import ValidationError
 
-from students.models import Enrollment
+from students.models import Enrollment, GuardianStudent
 
 from .models import (
     GradeTuitionPlan,
@@ -24,6 +25,32 @@ from .utils import (
 
 ZERO_USD = Decimal("0.00")
 HUNDRED = Decimal("100")
+
+
+def _notify_payment_recorded(payment):
+    student = payment.account.enrollment.student
+    guardian_link = GuardianStudent.objects.filter(
+        student=student,
+        student__is_active=True,
+        guardian__is_active=True,
+        guardian__role="guardian",
+        is_active=True,
+    ).select_related("guardian").first()
+    if guardian_link is None:
+        return
+    create_notification(
+        recipient=guardian_link.guardian,
+        notification_type="finance",
+        title="تم تسجيل دفعة مالية",
+        body=(
+            "تم تسجيل دفعة مالية على حساب الطالب. "
+            "يمكنك مراجعة التفاصيل داخل التطبيق."
+        ),
+        student=student,
+        resource_type="finance",
+        resource_id=payment.id,
+        event_key=f"finance:payment:{payment.id}:created",
+    )
 
 
 def ensure_financial_account_for_enrollment(
@@ -717,6 +744,7 @@ def record_payment(
         target=payment,
         metadata={"student": student_name, "amount": amount, "currency": currency, "equivalent_usd": equivalent_usd},
     )
+    _notify_payment_recorded(payment)
     return payment
 
 

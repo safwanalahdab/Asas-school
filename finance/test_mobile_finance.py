@@ -1,14 +1,16 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from academics.models import AcademicYear, GradeLevel, Section
 from audit_logs.models import AuditLog
+from notifications.models import Notification
 from students.models import Enrollment, GuardianStudent, Student
 
 from .models import (
@@ -17,6 +19,12 @@ from .models import (
     Payment,
     StudentDiscount,
     StudentFinancialAccount,
+)
+from .services import (
+    cancel_payment,
+    create_student_discount,
+    ensure_financial_account_for_enrollment,
+    record_payment,
 )
 
 
@@ -101,6 +109,67 @@ class MobileFinanceTests(TestCase):
             account=account, currency=currency, amount=Decimal(amount),
             equivalent_usd=Decimal(equivalent), recorded_by=self.staff, **kwargs,
         )
+
+    def test_record_payment_notifies_once_and_cancellation_does_not_notify(self):
+        account = self.make_account()
+        payment = record_payment(
+            account=account, currency=MoneyCurrency.USD,
+            amount=Decimal("125.00"), actor=self.staff,
+        )
+        notification = Notification.objects.get()
+        self.assertEqual(notification.recipient, self.guardian)
+        self.assertEqual(notification.student, self.child)
+        self.assertEqual(notification.resource_id, payment.id)
+        self.assertEqual(
+            notification.event_key, f"finance:payment:{payment.id}:created",
+        )
+        for private_value in ("125", "USD", "usd"):
+            self.assertNotIn(private_value, notification.body)
+        cancel_payment(
+            payment=payment, actor=self.staff, cancellation_reason="correction",
+        )
+        self.assertEqual(Notification.objects.count(), 1)
+
+    def test_account_assignment_and_discount_do_not_notify(self):
+        account = ensure_financial_account_for_enrollment(
+            enrollment=self.enrollment, actor=self.staff,
+        )
+        create_student_discount(
+            account=account,
+            discount_type=StudentDiscount.DiscountType.PERCENTAGE,
+            value=Decimal("5.00"),
+            actor=self.staff,
+        )
+        self.assertFalse(Notification.objects.exists())
+
+    def test_payment_without_guardian_link_succeeds_without_notification(self):
+        child = Student.objects.create(
+            first_name="No", last_name="Guardian", birth_date=date(2015, 1, 1),
+            gender=Student.Gender.MALE,
+        )
+        enrollment = Enrollment.objects.create(
+            student=child, academic_year=self.year, section=self.section,
+            enrollment_date=date(2026, 1, 1),
+        )
+        account = self.make_account(enrollment=enrollment)
+        payment = record_payment(
+            account=account, currency=MoneyCurrency.USD,
+            amount=Decimal("50.00"), actor=self.staff,
+        )
+        self.assertIsNotNone(payment.pk)
+        self.assertFalse(Notification.objects.exists())
+
+    @override_settings(FIREBASE_PUSH_ENABLED=True)
+    @patch("notifications.push_services.send_notification_push", side_effect=RuntimeError("firebase down"))
+    def test_firebase_failure_does_not_break_payment(self, _send):
+        account = self.make_account()
+        with self.captureOnCommitCallbacks(execute=True):
+            payment = record_payment(
+                account=account, currency=MoneyCurrency.USD,
+                amount=Decimal("75.00"), actor=self.staff,
+            )
+        self.assertIsNotNone(payment.pk)
+        self.assertEqual(Notification.objects.count(), 1)
 
     def test_configured_account_uses_services_and_historical_values(self):
         account = self.make_account()

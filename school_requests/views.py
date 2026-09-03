@@ -24,6 +24,7 @@ from .serializers import (
     AnswerSchoolRequestSerializer,
     SchoolRequestSerializer,
 )
+from .services import notify_school_request_answered
 
 
 User = get_user_model()
@@ -171,6 +172,8 @@ class SchoolRequestViewSet(
                     "updated_at",
                 ]
             )
+
+            notify_school_request_answered(school_request)
 
         response_serializer = SchoolRequestSerializer(
             school_request,

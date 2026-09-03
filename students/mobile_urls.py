@@ -11,6 +11,14 @@ app_name = "students-mobile"
 
 urlpatterns = [
     path(
+        "devices/",
+        include("notifications.mobile_device_urls"),
+    ),
+    path(
+        "notifications/",
+        include("notifications.mobile_urls"),
+    ),
+    path(
         "appointments/",
         include("appointments.mobile_urls"),
     ),

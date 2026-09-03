@@ -1,16 +1,18 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib import admin
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.test import RequestFactory
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.test import APIClient
 
 from academics.models import AcademicYear, GradeLevel, GradeSubject, Section, Subject, Term
-from students.models import Enrollment, Student, StudentAuditLog
+from notifications.models import Notification
+from students.models import Enrollment, GuardianStudent, Student, StudentAuditLog
 from students.services import transfer_student_between_sections
 from teaching.models import TeacherAssignment
 
@@ -117,6 +119,71 @@ class GradesRefactorTests(TestCase):
         if future_date > timezone.localdate():
             self.assertEqual(future.assessment_sections.get().status, AssessmentSection.Status.DRAFT)
             self.assertEqual(result["skipped_future_count"], 1)
+
+    def test_publish_notifies_only_guardian_with_actual_result_once(self):
+        guardian = User.objects.create_user(
+            username="grades-guardian", password="x", role=User.Role.GUARDIAN,
+            must_change_password=False,
+        )
+        GuardianStudent.objects.create(guardian=guardian, student=self.student)
+        assessment = self.assessment(when=timezone.localdate())
+        save_assessment_scores_bulk(
+            assessment=assessment, section=self.a,
+            records=[{"enrollment": self.enrollment, "score": Decimal("18")}],
+            actor=self.admin,
+        )
+        self.assertFalse(Notification.objects.exists())
+
+        publish_section_assessments(section=self.a, term=self.term, actor=self.admin)
+        notification = Notification.objects.get()
+        link = assessment.assessment_sections.get()
+        self.assertEqual(notification.recipient, guardian)
+        self.assertEqual(notification.student, self.student)
+        self.assertEqual(notification.resource_id, link.id)
+        self.assertEqual(
+            notification.event_key,
+            f"grade_publish:{link.id}:student:{self.student.id}",
+        )
+        self.assertNotIn("18", notification.body)
+
+        publish_section_assessments(section=self.a, term=self.term, actor=self.admin)
+        self.assertEqual(Notification.objects.count(), 1)
+
+    def test_publish_without_actual_score_creates_no_notification(self):
+        guardian = User.objects.create_user(
+            username="grades-null-guardian", password="x",
+            role=User.Role.GUARDIAN, must_change_password=False,
+        )
+        GuardianStudent.objects.create(guardian=guardian, student=self.student)
+        assessment = self.assessment(when=timezone.localdate())
+        save_assessment_scores_bulk(
+            assessment=assessment, section=self.a,
+            records=[{"enrollment": self.enrollment, "score": None}],
+            actor=self.admin,
+        )
+        publish_section_assessments(section=self.a, term=self.term, actor=self.admin)
+        self.assertFalse(Notification.objects.exists())
+
+    @override_settings(FIREBASE_PUSH_ENABLED=True)
+    @patch("notifications.push_services.send_notification_push", side_effect=RuntimeError("firebase down"))
+    def test_firebase_failure_does_not_break_publish(self, _send):
+        guardian = User.objects.create_user(
+            username="grades-push-guardian", password="x",
+            role=User.Role.GUARDIAN, must_change_password=False,
+        )
+        GuardianStudent.objects.create(guardian=guardian, student=self.student)
+        assessment = self.assessment(when=timezone.localdate())
+        save_assessment_scores_bulk(
+            assessment=assessment, section=self.a,
+            records=[{"enrollment": self.enrollment, "score": Decimal("10")}],
+            actor=self.admin,
+        )
+        with self.captureOnCommitCallbacks(execute=True):
+            result = publish_section_assessments(
+                section=self.a, term=self.term, actor=self.admin,
+            )
+        self.assertEqual(result["published_count"], 1)
+        self.assertEqual(Notification.objects.count(), 1)
 
     def test_published_definition_and_deletion_rules(self):
         assessment = self.assessment()

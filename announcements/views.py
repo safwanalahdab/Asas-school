@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -15,6 +16,7 @@ from .filters import AnnouncementFilter
 from .models import Announcement
 from .permissions import CanAccessAnnouncements
 from .serializers import AnnouncementSerializer
+from .services import notify_announcement_published
 
 
 User = get_user_model()
@@ -196,7 +198,9 @@ class AnnouncementViewSet(
 
         return queryset.none()
 
+    @transaction.atomic
     def perform_create(self, serializer):
-        serializer.save(
+        announcement = serializer.save(
             created_by=self.request.user,
         )
+        notify_announcement_published(announcement)

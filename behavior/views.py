@@ -1,3 +1,5 @@
+from django.db import transaction
+
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 
@@ -6,6 +8,7 @@ from accounts.permissions import IsWebDashboardUser
 from .models import BehaviorNote
 from .permissions import CanAccessBehaviorNotes
 from .serializers import BehaviorNoteSerializer
+from .services import notify_behavior_note_created
 from config.api_responses import ArabicApiResponseMixin
 
 
@@ -57,7 +60,10 @@ class BehaviorNoteViewSet(
         ),
     }
 
+    @transaction.atomic
     def perform_create(self, serializer):
-        serializer.save(
+        behavior_note = serializer.save(
             created_by=self.request.user,
         )
+        notify_behavior_note_created(behavior_note)
+from django.db import transaction

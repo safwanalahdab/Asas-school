@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
@@ -10,6 +11,7 @@ from .models import Homework
 
 from .permissions import CanAccessHomework
 from .serializers import HomeworkSerializer
+from .services import notify_homework_created
 
 from .filters import HomeworkFilter
 
@@ -131,14 +133,16 @@ class HomeworkViewSet(
                 }
             )
 
+    @transaction.atomic
     def perform_create(self, serializer):
         self.validate_teacher_assignment_access(
             serializer,
         )
 
-        serializer.save(
+        homework = serializer.save(
             created_by=self.request.user,
         )
+        notify_homework_created(homework)
 
     def perform_update(self, serializer):
         self.validate_teacher_assignment_access(

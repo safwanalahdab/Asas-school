@@ -57,7 +57,10 @@ class ArabicApiResponseMixin:
         ):
             return response
         if isinstance(response.data, dict) and "success" in response.data:
-            response.data["meta"] = requester_role_meta(request)
+            response.data["meta"] = {
+                **response.data.get("meta", {}),
+                **requester_role_meta(request),
+            }
             return response
 
         code, message = self.get_response_message()
@@ -73,10 +76,12 @@ class ArabicApiResponseMixin:
             return response
         if payload is None:
             return response
+        custom_meta = {}
         if isinstance(payload, dict):
             payload = payload.copy()
             code = payload.pop("code", code)
             message = payload.pop("message", payload.pop("detail", message))
+            custom_meta = payload.pop("meta", {})
             if set(payload) == {"data"}:
                 payload = payload["data"]
 
@@ -85,6 +90,9 @@ class ArabicApiResponseMixin:
             "code": str(code).upper(),
             "message": str(message),
             "data": payload,
-            "meta": requester_role_meta(request),
+            "meta": {
+                **custom_meta,
+                **requester_role_meta(request),
+            },
         }
         return response

@@ -8,9 +8,41 @@ from rest_framework.exceptions import ValidationError
 from academics.models import Section
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
-from students.models import Enrollment, StudentAuditLog
+from notifications.services import create_notification
+from students.models import Enrollment, GuardianStudent, StudentAuditLog
 from .domain import ATTENDANCE_FIELDS, normalize_and_validate_record
 from .models import AttendanceRecord, AttendanceSheet
+
+
+def _notify_final_absences(records):
+    absent_records = [
+        record for record in records
+        if record.status == AttendanceRecord.Status.ABSENT
+    ]
+    guardian_links = {
+        link.student_id: link
+        for link in GuardianStudent.objects.filter(
+            student_id__in=[record.enrollment.student_id for record in absent_records],
+            student__is_active=True,
+            guardian__is_active=True,
+            guardian__role="guardian",
+            is_active=True,
+        ).select_related("guardian", "student")
+    }
+    for record in absent_records:
+        guardian_link = guardian_links.get(record.enrollment.student_id)
+        if guardian_link is None:
+            continue
+        create_notification(
+            recipient=guardian_link.guardian,
+            notification_type="attendance",
+            title="تسجيل غياب",
+            body="تم تسجيل غياب للطالب. يمكنك مراجعة تفاصيل الحضور داخل التطبيق.",
+            student=guardian_link.student,
+            resource_type="attendance",
+            resource_id=record.id,
+            event_key=f"attendance:{record.id}:absent",
+        )
 
 
 def get_effective_attendance_roster(*, section, attendance_date):
@@ -73,7 +105,7 @@ def create_attendance_sheet(*, section, actor, records):
     try:
         with transaction.atomic():
             sheet = AttendanceSheet.objects.create(section=section, attendance_date=today, created_by=actor)
-            AttendanceRecord.objects.bulk_create([
+            attendance_records = AttendanceRecord.objects.bulk_create([
                 AttendanceRecord(sheet=sheet, enrollment=enrollment, **{f: values[f] for f in ATTENDANCE_FIELDS})
                 for enrollment, values in cleaned
             ])
@@ -93,16 +125,20 @@ def create_attendance_sheet(*, section, actor, records):
             "students_count": len(cleaned),
         },
     )
+    _notify_final_absences(attendance_records)
     return sheet
 
 
 @transaction.atomic
 def update_attendance_record(*, record, data):
     record = AttendanceRecord.objects.select_for_update().get(pk=record.pk)
+    was_absent = record.status == AttendanceRecord.Status.ABSENT
     values = normalize_and_validate_record(data, current=record)
     for field in ATTENDANCE_FIELDS:
         setattr(record, field, values[field])
     record.save(update_fields=[*ATTENDANCE_FIELDS, "updated_at"])
+    if not was_absent and record.status == AttendanceRecord.Status.ABSENT:
+        _notify_final_absences([record])
     return record
 
 
@@ -115,9 +151,11 @@ def bulk_update_attendance(*, sheet, items, actor=None):
     if set(ids) != set(records):
         raise ValidationError({"code": "ATTENDANCE_RECORD_INVALID", "detail": "أحد السجلات لا ينتمي إلى هذا الكشف."})
     changed = []
+    newly_absent = []
     now = timezone.now()
     for item in items:
         record = records[item["id"]]
+        was_absent = record.status == AttendanceRecord.Status.ABSENT
         values = normalize_and_validate_record(item, current=record)
         if not any(
             getattr(record, field) != values[field]
@@ -128,6 +166,8 @@ def bulk_update_attendance(*, sheet, items, actor=None):
             setattr(record, field, values[field])
         record.updated_at = now
         changed.append(record)
+        if not was_absent and record.status == AttendanceRecord.Status.ABSENT:
+            newly_absent.append(record)
     changed_count = len(changed)
     if changed:
         AttendanceRecord.objects.bulk_update(changed, [*ATTENDANCE_FIELDS, "updated_at"])
@@ -145,6 +185,7 @@ def bulk_update_attendance(*, sheet, items, actor=None):
                 "changed_count": changed_count,
             },
         )
+    _notify_final_absences(newly_absent)
     return changed
 
 
