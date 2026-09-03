@@ -270,10 +270,6 @@ def get_dashboard_overview(
         SchoolRequest.objects
         .filter(
             status=SchoolRequest.Status.NEW,
-            request_type__in=[
-                SchoolRequest.RequestType.COMPLAINT,
-                SchoolRequest.RequestType.INQUIRY,
-            ],
         )
         .count()
     )
