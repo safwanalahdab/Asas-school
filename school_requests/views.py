@@ -121,7 +121,7 @@ class SchoolRequestViewSet(
     def answer(self, request, pk=None):
         with transaction.atomic():
             school_request = get_object_or_404(
-                self.get_queryset().select_for_update(),
+                self.get_queryset().select_for_update(of=("self",)),
                 pk=pk,
             )
 

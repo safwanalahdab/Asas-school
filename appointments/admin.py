@@ -41,8 +41,6 @@ class AppointmentRequestAdmin(admin.ModelAdmin):
     readonly_fields = (
         "id",
         "guardian",
-        "requested_date",
-        "request_reason",
         "decided_by",
         "decided_at",
         "created_at",

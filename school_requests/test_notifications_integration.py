@@ -2,6 +2,7 @@ from datetime import date
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.shortcuts import get_object_or_404 as django_get_object_or_404
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -59,6 +60,11 @@ class SchoolRequestNotificationTests(TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             response = self.answer(school_request, response_text)
         self.assertEqual(response.status_code, 200)
+        school_request.refresh_from_db()
+        self.assertEqual(school_request.status, SchoolRequest.Status.ANSWERED)
+        self.assertEqual(school_request.school_response, response_text)
+        self.assertEqual(school_request.handled_by, self.staff)
+        self.assertIsNotNone(school_request.answered_at)
         notification = Notification.objects.get()
         self.assertEqual(notification.recipient, self.guardian)
         self.assertEqual(notification.student, self.student)
@@ -67,6 +73,20 @@ class SchoolRequestNotificationTests(TestCase):
         self.assertEqual(notification.resource_id, school_request.id)
         self.assertEqual(notification.event_key, f"school_request:{school_request.id}:answered")
         self.assertNotIn(response_text, notification.body)
+
+    def test_answer_locks_only_school_request_row(self):
+        school_request = self.create_request()
+        observed_lock_targets = []
+
+        def inspect_lock(queryset, *args, **kwargs):
+            observed_lock_targets.append(queryset.query.select_for_update_of)
+            return django_get_object_or_404(queryset, *args, **kwargs)
+
+        with patch("school_requests.views.get_object_or_404", side_effect=inspect_lock):
+            response = self.answer(school_request, "Saved response")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(observed_lock_targets, [("self",)])
 
     def test_answer_without_student_is_supported(self):
         school_request = self.create_request(student_marker=False)
