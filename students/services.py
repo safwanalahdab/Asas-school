@@ -1,11 +1,125 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework.exceptions import ValidationError
 
+from accounts.models import User
+from accounts.services import assign_temporary_password
 from academics.models import Section
 
-from .models import Enrollment, StudentAuditLog
+from .models import (
+    Enrollment,
+    GuardianStudent,
+    Student,
+    StudentAuditLog,
+    StudentHealthProfile,
+)
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
+
+
+def ensure_student_health_profile(student):
+    health_profile, _ = StudentHealthProfile.objects.get_or_create(
+        student=student,
+    )
+    return health_profile
+
+
+@transaction.atomic
+def register_student(
+    *,
+    student_data,
+    health_profile_data=None,
+    guardian_data=None,
+):
+    student = Student.objects.create(**student_data)
+    health_profile = ensure_student_health_profile(student)
+
+    if health_profile_data:
+        health_fields = list(health_profile_data)
+        for field_name, value in health_profile_data.items():
+            setattr(health_profile, field_name, value)
+        health_profile.save(update_fields=[*health_fields, "updated_at"])
+
+    guardian_account = {
+        "status": "not_created",
+        "username": None,
+        "temporary_password": None,
+    }
+
+    if guardian_data:
+        national_id = guardian_data["national_id"]
+        guardian = User.objects.filter(national_id=national_id).first()
+
+        if guardian is not None and guardian.role != User.Role.GUARDIAN:
+            raise ValidationError(
+                {
+                    "guardian": {
+                        "national_id": (
+                            "الرقم الوطني مرتبط بحساب لا يخص ولي أمر."
+                        ),
+                    },
+                }
+            )
+
+        if guardian is None:
+            if User.objects.filter(username=national_id).exists():
+                raise ValidationError(
+                    {
+                        "guardian": {
+                            "national_id": (
+                                "الرقم الوطني مستخدم كاسم مستخدم لحساب آخر."
+                            ),
+                        },
+                    }
+                )
+
+            guardian = User(
+                username=national_id,
+                national_id=national_id,
+                phone_number=guardian_data.get("phone_number", ""),
+                role=User.Role.GUARDIAN,
+                first_name=guardian_data["first_name"],
+                last_name=guardian_data["last_name"],
+            )
+            temporary_password = assign_temporary_password(guardian)
+            try:
+                with transaction.atomic():
+                    guardian.save()
+            except IntegrityError:
+                guardian = User.objects.filter(national_id=national_id).first()
+                if guardian is None or guardian.role != User.Role.GUARDIAN:
+                    raise ValidationError(
+                        {
+                            "guardian": {
+                                "national_id": (
+                                    "تعذر إنشاء حساب ولي الأمر لأن الرقم الوطني "
+                                    "أو اسم المستخدم مستخدم مسبقًا."
+                                ),
+                            },
+                        }
+                    )
+                temporary_password = None
+                guardian_status = "linked_existing"
+            else:
+                guardian_status = "created"
+        else:
+            temporary_password = None
+            guardian_status = "linked_existing"
+
+        GuardianStudent.objects.create(
+            guardian=guardian,
+            student=student,
+            relationship=guardian_data["relationship"],
+        )
+        guardian_account = {
+            "status": guardian_status,
+            "username": guardian.username,
+            "temporary_password": temporary_password,
+        }
+
+    return {
+        "student": student,
+        "guardian_account": guardian_account,
+    }
 
 
 @transaction.atomic

@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from accounts.mobile_authentication import MobileJWTAuthentication
 from accounts.mobile_permissions import IsMobileGuardian
 from config.api_responses import ArabicApiResponseMixin
+from config.pagination import StandardPageNumberPagination
 from students.mobile_selectors import get_guardian_child_or_404
 
 from .mobile_serializers import (
@@ -27,6 +28,18 @@ class MobileChildHomeworkView(ArabicApiResponseMixin, APIView):
             OpenApiParameter("date_from", type={"type": "string", "format": "date"}, location=OpenApiParameter.QUERY),
             OpenApiParameter("date_to", type={"type": "string", "format": "date"}, location=OpenApiParameter.QUERY),
             OpenApiParameter("subject", type={"type": "string", "format": "uuid"}, location=OpenApiParameter.QUERY),
+            OpenApiParameter(
+                "page",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Page number.",
+            ),
+            OpenApiParameter(
+                "page_size",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Number of results per page (default 20, maximum 50).",
+            ),
         ],
         responses={
             200: MobileHomeworkResponseSerializer,
@@ -65,13 +78,18 @@ class MobileChildHomeworkView(ArabicApiResponseMixin, APIView):
                 homework = homework.filter(
                     teacher_assignment__grade_subject__subject_id=values["subject"]
                 )
-            homework = homework.order_by("-homework_date", "-created_at")
+        homework = homework.order_by("-homework_date", "-created_at", "-id")
 
+        paginator = StandardPageNumberPagination()
+        page = paginator.paginate_queryset(homework, request, view=self)
         serializer = MobileHomeworkSerializer(
-            homework, many=True, context={"request": request}
+            page, many=True, context={"request": request}
         )
         return Response({
             "code": "MOBILE_CHILD_HOMEWORK_RETRIEVED",
             "detail": "تم جلب واجبات الطالب بنجاح.",
             "data": serializer.data,
+            "meta": {
+                "pagination": paginator.get_pagination_meta(request),
+            },
         })

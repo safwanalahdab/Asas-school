@@ -4,6 +4,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     EnrollmentViewSet,
     GuardianStudentViewSet,
+    StudentHealthProfileView,
+    StudentRegistrationView,
     StudentViewSet,
 )
 
@@ -30,5 +32,11 @@ router.register(
 
 
 urlpatterns = [
+    path("register/", StudentRegistrationView.as_view(), name="student-register"),
+    path(
+        "<uuid:student_id>/health-profile/",
+        StudentHealthProfileView.as_view(),
+        name="student-health-profile",
+    ),
     path("", include(router.urls)),
 ]

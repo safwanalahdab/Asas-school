@@ -54,7 +54,7 @@ class MobileSchoolRequestViewSet(
     def get_queryset(self):
         return SchoolRequest.objects.filter(
             guardian=self.request.user,
-        ).select_related("student")
+        ).select_related("student").order_by("-created_at", "-id")
 
     def get_throttles(self):
         if self.action == "create":

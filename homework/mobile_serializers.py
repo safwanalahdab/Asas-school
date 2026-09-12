@@ -63,8 +63,23 @@ class MobileHomeworkSerializer(serializers.ModelSerializer):
         }
 
 
+class MobileHomeworkRequesterRoleSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    label = serializers.CharField()
+
+
+class MobileHomeworkPaginationSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    page = serializers.IntegerField()
+    page_size = serializers.IntegerField()
+    total_pages = serializers.IntegerField()
+
+
 class MobileHomeworkMetaSerializer(serializers.Serializer):
-    requester_role = serializers.JSONField(allow_null=True)
+    requester_role = MobileHomeworkRequesterRoleSerializer(allow_null=True)
+    pagination = MobileHomeworkPaginationSerializer(required=False)
 
 
 class MobileHomeworkResponseSerializer(serializers.Serializer):

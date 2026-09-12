@@ -11,6 +11,8 @@ class CustomUserAdmin(UserAdmin):
             "بيانات منصة أساس",
             {
                 "fields": (
+                    "national_id",
+                    "phone_number",
                     "role",
                     "must_change_password",
                 )
@@ -24,6 +26,8 @@ class CustomUserAdmin(UserAdmin):
             {
                 "fields": (
                     "email",
+                    "national_id",
+                    "phone_number",
                     "role",
                     "must_change_password",
                 )
@@ -33,6 +37,8 @@ class CustomUserAdmin(UserAdmin):
 
     list_display = (
         "username",
+        "national_id",
+        "phone_number",
         "email",
         "role",
         "is_active",
@@ -47,6 +53,8 @@ class CustomUserAdmin(UserAdmin):
 
     search_fields = (
         "username",
+        "national_id",
+        "phone_number",
         "first_name",
         "last_name",
         "email",

@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db.models import Q
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -125,6 +126,9 @@ class MobileAnnouncementsApiTests(TestCase):
         response = self.client.get(self.url(self.no_enrollment))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"], [])
+        self.assertEqual(response.data["meta"]["pagination"]["count"], 0)
+        self.assertEqual(response.data["meta"]["pagination"]["page"], 1)
+        self.assertEqual(response.data["meta"]["pagination"]["total_pages"], 1)
 
     def test_child_with_historical_enrollment_only_gets_empty_announcements(self):
         historical_year = AcademicYear.objects.create(
@@ -255,3 +259,129 @@ class MobileAnnouncementsApiTests(TestCase):
         self.assertTrue(item["is_active"])
         self.assertIsNone(item["attachment"])
         self.assertTrue({"created_by", "grade_levels", "sections"}.isdisjoint(item))
+
+    def test_default_pagination_contract_count_and_navigation(self):
+        for index in range(21):
+            self.create_announcement(
+                Announcement.Scope.ALL,
+                f"Paginated announcement {index}",
+            )
+        self.authenticate()
+
+        first = self.client.get(self.url())
+        second = self.client.get(self.url(), {"page": 2})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertIsInstance(first.data["data"], list)
+        self.assertEqual(len(first.data["data"]), 20)
+        self.assertEqual(
+            first.data["code"],
+            "MOBILE_CHILD_ANNOUNCEMENTS_RETRIEVED",
+        )
+        self.assertEqual(
+            first.data["message"],
+            "\u062a\u0645 \u062c\u0644\u0628 \u0625\u0639\u0644\u0627\u0646\u0627\u062a "
+            "\u0627\u0644\u0637\u0627\u0644\u0628 \u0628\u0646\u062c\u0627\u062d.",
+        )
+        pagination = first.data["meta"]["pagination"]
+        self.assertEqual(pagination["count"], 24)
+        self.assertIsNotNone(pagination["next"])
+        self.assertIsNone(pagination["previous"])
+        self.assertEqual(pagination["page_size"], 20)
+        self.assertEqual(pagination["total_pages"], 2)
+        self.assertEqual(
+            first.data["meta"]["requester_role"]["code"],
+            User.Role.GUARDIAN,
+        )
+        first_ids = {item["id"] for item in first.data["data"]}
+        second_ids = {item["id"] for item in second.data["data"]}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertIsNotNone(second.data["meta"]["pagination"]["previous"])
+        self.assertIsNone(second.data["meta"]["pagination"]["next"])
+
+    def test_page_size_query_parameter_and_maximum(self):
+        for index in range(58):
+            self.create_announcement(
+                Announcement.Scope.ALL,
+                f"Sized announcement {index}",
+            )
+        self.authenticate()
+
+        thirty = self.client.get(self.url(), {"page_size": 30})
+        capped = self.client.get(self.url(), {"page_size": 100})
+
+        self.assertEqual(len(thirty.data["data"]), 30)
+        self.assertEqual(thirty.data["meta"]["pagination"]["page_size"], 30)
+        self.assertEqual(len(capped.data["data"]), 50)
+        self.assertEqual(capped.data["meta"]["pagination"]["page_size"], 50)
+
+    def test_scope_and_temporal_visibility_are_applied_before_pagination(self):
+        for index in range(21):
+            self.create_announcement(
+                Announcement.Scope.ALL,
+                f"Visible announcement {index}",
+            )
+        other_grade = self.create_announcement(
+            Announcement.Scope.GRADES,
+            "Excluded grade announcement",
+        )
+        other_grade.grade_levels.add(self.other_grade)
+        other_section = self.create_announcement(
+            Announcement.Scope.SECTIONS,
+            "Excluded section announcement",
+        )
+        other_section.sections.add(self.other_section)
+        self.create_announcement(
+            Announcement.Scope.ALL,
+            "Future announcement",
+            publish_date=self.today + timedelta(days=1),
+        )
+        self.create_announcement(
+            Announcement.Scope.ALL,
+            "Expired announcement",
+            publish_date=self.today - timedelta(days=2),
+            expiry_date=self.today - timedelta(days=1),
+        )
+        self.authenticate()
+
+        response = self.client.get(self.url())
+
+        self.assertEqual(response.data["meta"]["pagination"]["count"], 24)
+
+    def test_deterministic_ordering_and_distinct_across_pages(self):
+        duplicate_candidate = self.create_announcement(
+            Announcement.Scope.GRADES,
+            "Distinct paginated announcement",
+        )
+        duplicate_candidate.grade_levels.add(self.grade, self.other_grade)
+        for index in range(21):
+            self.create_announcement(
+                Announcement.Scope.ALL,
+                f"Ordered announcement {index}",
+            )
+        self.authenticate()
+
+        first = self.client.get(self.url())
+        second = self.client.get(self.url(), {"page": 2})
+        actual_ids = [
+            item["id"] for item in first.data["data"] + second.data["data"]
+        ]
+        target_scope = (
+            Q(scope=Announcement.Scope.ALL)
+            | Q(scope=Announcement.Scope.GRADES, grade_levels=self.grade)
+            | Q(scope=Announcement.Scope.SECTIONS, sections=self.section)
+        )
+        expected_ids = [
+            str(announcement_id)
+            for announcement_id in Announcement.objects.filter(
+                target_scope,
+                publish_date__lte=self.today,
+            )
+            .filter(Q(expiry_date__isnull=True) | Q(expiry_date__gte=self.today))
+            .distinct()
+            .order_by("-publish_date", "-created_at", "-id")
+            .values_list("id", flat=True)
+        ]
+
+        self.assertEqual(actual_ids, expected_ids)
+        self.assertEqual(actual_ids.count(str(duplicate_candidate.id)), 1)

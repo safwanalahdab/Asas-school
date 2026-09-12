@@ -60,10 +60,12 @@ The backend is built using:
 * Pillow
 * Gunicorn
 
-Production services currently include:
+Temporary testing services currently include:
 
 * Render for backend hosting
-* Neon PostgreSQL for the production database
+* Neon PostgreSQL for the testing database
+
+These services are not the selected final paid production infrastructure.
 
 ---
 
@@ -284,42 +286,97 @@ Manual API testing can additionally be performed using Swagger UI or Postman.
 
 # Production Deployment
 
-The backend is currently deployed using **Render** with a PostgreSQL database hosted on **Neon**.
+The current Render backend and Neon database are temporary testing infrastructure.
+The final paid hosting provider, domain, proxy topology, and managed services have
+not yet been selected. The following process is intentionally provider-neutral.
 
-Production configuration must be provided using environment variables configured in the hosting environment.
+Production configuration must be supplied through environment variables in the
+selected hosting environment. Use `.env.example` as the configuration reference
+and never commit real secrets. At minimum, confirm correct values for:
 
-Sensitive production values must never be committed to Git.
+* `SECRET_KEY`, `DEBUG`, and `ALLOWED_HOSTS`
+* PostgreSQL `DB_*` variables
+* `JWT_SIGNING_KEY`
+* Frontend and backend origins
+* JWT cookie and CSRF security values as applicable to the final topology
+* `LOG_LEVEL`
+* Firebase configuration when push notifications are enabled
+* The production security flags prepared in the settings foundation
 
-Typical deployment flow:
+## Deployment Phases
 
-```text
-Local development
-        ↓
-Tests and validation
-        ↓
-Git commit
-        ↓
-Push to main
-        ↓
-Render deployment
-        ↓
-Production verification
+Keep build, release, and application startup as separate phases.
+
+### Build
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
 ```
 
-After deployment, verify at minimum:
+Validate the Django configuration:
 
-* Application startup
-* Database connection
-* Migrations
-* Authentication
-* CORS
-* CSRF
-* API availability
-* Swagger/OpenAPI availability when enabled
-* Critical API endpoints
-* Production logs
+```bash
+python manage.py check
+```
 
-Database migrations should be handled carefully because production migrations may modify existing data or database structures.
+Collect static assets:
+
+```bash
+python manage.py collectstatic --noinput
+```
+
+### Release / Deploy
+
+Apply database migrations once as a separate release operation:
+
+```bash
+python manage.py migrate --noinput
+```
+
+Do not place migrations in the Gunicorn start command. Keeping migrations in a
+separate release phase prevents multiple application processes or restarts from
+attempting schema changes concurrently.
+
+### Start
+
+Start the WSGI application with:
+
+```bash
+gunicorn config.wsgi:application
+```
+
+Worker counts, threads, timeouts, and other resource-dependent tuning should be
+selected only after the final hosting platform and resource limits are known.
+
+## Operational Verification
+
+The unauthenticated operational health endpoint is:
+
+```text
+GET /health/
+```
+
+After deployment, verify application startup, database connectivity, migrations,
+authentication, CORS and CSRF behavior, API availability, health status, and logs.
+
+## Static Files and Media
+
+Static files include Django Admin, Swagger/ReDoc, and project static assets. They
+can currently be collected with `collectstatic` and served through the existing
+WhiteNoise configuration.
+
+Media files are different: homework and announcement attachments are user-uploaded
+content. Final production must store them in durable external object storage.
+WhiteNoise is not a storage or serving solution for user-uploaded media.
+
+## Deferred Infrastructure Decisions
+
+The exact production Python version will be pinned after the final hosting and
+runtime requirements are selected. A Dockerfile, Procfile, `render.yaml`, runtime
+pinning, worker count, object-storage provider settings, and provider-specific
+release commands also remain deferred until the paid hosting platform is selected.
 
 ---
 

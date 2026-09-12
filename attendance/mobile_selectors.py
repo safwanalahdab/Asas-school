@@ -18,7 +18,7 @@ def get_mobile_attendance_queryset(*, enrollment, date_from=None, date_to=None):
         queryset = queryset.filter(sheet__attendance_date__gte=date_from)
     if date_to is not None:
         queryset = queryset.filter(sheet__attendance_date__lte=date_to)
-    return queryset.order_by("-sheet__attendance_date", "-created_at")
+    return queryset.order_by("-sheet__attendance_date", "-created_at", "-id")
 
 
 def get_mobile_attendance_summary(*, queryset):

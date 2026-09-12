@@ -42,8 +42,23 @@ class MobileBehaviorDataSerializer(serializers.Serializer):
     notes = MobileBehaviorNoteSerializer(many=True)
 
 
+class MobileBehaviorRequesterRoleSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    label = serializers.CharField()
+
+
+class MobileBehaviorPaginationSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    page = serializers.IntegerField()
+    page_size = serializers.IntegerField()
+    total_pages = serializers.IntegerField()
+
+
 class MobileBehaviorMetaSerializer(serializers.Serializer):
-    requester_role = serializers.JSONField(allow_null=True)
+    requester_role = MobileBehaviorRequesterRoleSerializer(allow_null=True)
+    pagination = MobileBehaviorPaginationSerializer(required=False)
 
 
 class MobileBehaviorResponseSerializer(serializers.Serializer):

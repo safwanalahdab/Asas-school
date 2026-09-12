@@ -9,6 +9,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from academics.models import AcademicYear, GradeLevel, Section
 from students.models import Enrollment, GuardianStudent, Student
 
+from .mobile_selectors import get_mobile_attendance_queryset
 from .models import AttendanceRecord, AttendanceSheet
 
 
@@ -214,6 +215,14 @@ class MobileAttendanceTests(TestCase):
         capped = self.client.get(self.history_url(), {"page_size": 500}).data["data"]
         self.assertEqual(capped["pagination"]["page_size"], 50)
         self.assertEqual(len(capped["records"]), 25)
+
+    def test_history_queryset_has_deterministic_pagination_ordering(self):
+        queryset = get_mobile_attendance_queryset(enrollment=self.enrollment)
+
+        self.assertEqual(
+            queryset.query.order_by,
+            ("-sheet__attendance_date", "-created_at", "-id"),
+        )
 
     def test_history_no_enrollment_has_zero_contract(self):
         child = self.make_child("NoHistory", self.guardian)

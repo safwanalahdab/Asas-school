@@ -65,6 +65,19 @@ class User(AbstractUser):
         null=True,
     )
 
+    national_id = models.CharField(
+        max_length=30,
+        unique=True,
+        null=True,
+        blank=True,
+    )
+
+    phone_number = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+    )
+
     role = models.CharField(
         max_length=30,
         choices=Role.choices,

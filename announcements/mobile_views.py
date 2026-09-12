@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from accounts.mobile_authentication import MobileJWTAuthentication
 from accounts.mobile_permissions import IsMobileGuardian
 from config.api_responses import ArabicApiResponseMixin
+from config.pagination import StandardPageNumberPagination
 from students.mobile_selectors import get_guardian_child_or_404
 
 from .mobile_serializers import (
@@ -25,6 +26,18 @@ class MobileChildAnnouncementsView(ArabicApiResponseMixin, APIView):
     @extend_schema(
         parameters=[
             OpenApiParameter("student_id", type={"type": "string", "format": "uuid"}, location=OpenApiParameter.PATH),
+            OpenApiParameter(
+                "page",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Page number.",
+            ),
+            OpenApiParameter(
+                "page_size",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="Optional results per page (default 20, maximum 50).",
+            ),
         ],
         responses={
             200: MobileAnnouncementsResponseSerializer,
@@ -61,14 +74,19 @@ class MobileChildAnnouncementsView(ArabicApiResponseMixin, APIView):
                 )
                 .filter(Q(expiry_date__isnull=True) | Q(expiry_date__gte=today))
                 .distinct()
-                .order_by("-publish_date", "-created_at")
+                .order_by("-publish_date", "-created_at", "-id")
             )
 
+        paginator = StandardPageNumberPagination()
+        page = paginator.paginate_queryset(announcements, request, view=self)
         serializer = MobileAnnouncementSerializer(
-            announcements, many=True, context={"request": request}
+            page, many=True, context={"request": request}
         )
         return Response({
             "code": "MOBILE_CHILD_ANNOUNCEMENTS_RETRIEVED",
             "detail": "تم جلب إعلانات الطالب بنجاح.",
             "data": serializer.data,
+            "meta": {
+                "pagination": paginator.get_pagination_meta(request),
+            },
         })

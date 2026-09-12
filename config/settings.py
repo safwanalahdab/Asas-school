@@ -86,6 +86,13 @@ DEBUG = env(
     "DEBUG",
 )
 
+LOG_LEVEL = env("LOG_LEVEL", default="INFO").strip().upper()
+VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+if LOG_LEVEL not in VALID_LOG_LEVELS:
+    raise ImproperlyConfigured(
+        "LOG_LEVEL must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL."
+    )
+
 ALLOWED_HOSTS = env.list(
     "ALLOWED_HOSTS",
     default=(
@@ -97,6 +104,19 @@ ALLOWED_HOSTS = env.list(
         else []
     ),
 )
+
+
+# =========================================================
+# Production security
+# =========================================================
+
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=False)
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool(
+    "SECURE_HSTS_INCLUDE_SUBDOMAINS",
+    default=False,
+)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
 
 
 # =========================================================
@@ -256,13 +276,6 @@ USE_TZ = True
 
 
 # =========================================================
-# Static files
-# =========================================================
-
-STATIC_URL = "/static/"
-
-
-# =========================================================
 # Models
 # =========================================================
 
@@ -298,7 +311,9 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ],
-    "DEFAULT_PAGINATION_CLASS": ("rest_framework.pagination.PageNumberPagination"),
+    "DEFAULT_PAGINATION_CLASS": (
+        "config.pagination.StandardPageNumberPagination"
+    ),
     "PAGE_SIZE": 20,
     # معدل محاولات تسجيل الدخول.
     "DEFAULT_THROTTLE_RATES": {
@@ -517,4 +532,47 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
+}
+
+
+# =========================================================
+# Logging
+# =========================================================
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "console": {
+            "format": "{asctime} {levelname} {name} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "console",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+    },
 }

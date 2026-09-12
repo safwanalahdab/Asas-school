@@ -415,6 +415,8 @@ class UserViewSet(
 
     search_fields = [
         "username",
+        "national_id",
+        "phone_number",
         "email",
         "first_name",
         "last_name",

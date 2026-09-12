@@ -10,6 +10,36 @@ MANAGEMENT_ROLES = {
 }
 
 
+class CanRegisterStudent(BasePermission):
+    message = {
+        "code": "STUDENT_REGISTRATION_FORBIDDEN",
+        "detail": "ليس لديك صلاحية لتسجيل الطلاب.",
+    }
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and (user.is_superuser or user.role in MANAGEMENT_ROLES)
+        )
+
+
+class CanManageStudentHealthProfile(BasePermission):
+    message = {
+        "code": "STUDENT_HEALTH_PROFILE_FORBIDDEN",
+        "detail": "ليس لديك صلاحية لإدارة الملف الصحي للطالب.",
+    }
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and (user.is_superuser or user.role in MANAGEMENT_ROLES)
+        )
+
+
 class StudentPermission(BasePermission):
     def has_permission(self, request, view):
         user = request.user

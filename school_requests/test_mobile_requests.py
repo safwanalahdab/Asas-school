@@ -300,6 +300,44 @@ class MobileSchoolRequestTests(TestCase):
         ids = [item["id"] for item in self.response_items(self.client.get(self.list_url))]
         self.assertEqual(ids[:2], [str(newer.id), str(older.id)])
 
+    def test_owned_pagination_is_stable_when_created_at_values_match(self):
+        owned = [
+            self.create_request(details=f"Paginated {index}")
+            for index in range(23)
+        ]
+        other = self.create_request(guardian=self.other_guardian)
+        tied_time = timezone.now()
+        SchoolRequest.objects.filter(
+            id__in=[school_request.id for school_request in owned] + [other.id]
+        ).update(created_at=tied_time)
+        self.authenticate()
+
+        first = self.client.get(self.list_url)
+        second = self.client.get(f"{self.list_url}?page=2")
+        self.assertEqual(
+            set(first.data["data"]),
+            {"count", "next", "previous", "results"},
+        )
+        self.assertEqual(first.data["data"]["count"], 23)
+        self.assertEqual(len(first.data["data"]["results"]), 20)
+        first_ids = {item["id"] for item in first.data["data"]["results"]}
+        second_ids = {item["id"] for item in second.data["data"]["results"]}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertNotIn(str(other.id), first_ids | second_ids)
+        actual_ids = [
+            item["id"]
+            for item in (
+                first.data["data"]["results"] + second.data["data"]["results"]
+            )
+        ]
+        expected_ids = [
+            str(request_id)
+            for request_id in SchoolRequest.objects.filter(guardian=self.guardian)
+            .order_by("-created_at", "-id")
+            .values_list("id", flat=True)
+        ]
+        self.assertEqual(actual_ids, expected_ids)
+
     def test_burst_throttle_blocks_fourth_post_but_not_get(self):
         school_request = self.create_request()
         self.authenticate()

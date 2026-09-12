@@ -26,6 +26,18 @@ class Student(models.Model):
         max_length=100,
     )
 
+    first_name_en = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
+    last_name_en = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+    )
+
     father_name = models.CharField(
         max_length=100,
         blank=True,
@@ -95,6 +107,12 @@ class GuardianStudent(models.Model):
         related_name="guardian_link",
     )
 
+    relationship = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+    )
+
     is_active = models.BooleanField(
         default=True,
     )
@@ -112,6 +130,77 @@ class GuardianStudent(models.Model):
 
     def __str__(self):
         return f"{self.guardian} - {self.student}"
+
+
+class StudentHealthProfile(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    student = models.OneToOneField(
+        Student,
+        on_delete=models.CASCADE,
+        related_name="health_profile",
+    )
+
+    blood_type = models.CharField(
+        max_length=10,
+        blank=True,
+        default="",
+    )
+
+    chronic_diseases = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    allergies = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    permanent_medications = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    special_health_needs = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    emergency_contact_name = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+    )
+
+    emergency_contact_phone = models.CharField(
+        max_length=30,
+        blank=True,
+        default="",
+    )
+
+    health_notes = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "students_student_health_profile"
+
+    def __str__(self):
+        return f"Health profile - {self.student}"
 
 
 class Enrollment(models.Model):

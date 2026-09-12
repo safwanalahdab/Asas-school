@@ -118,10 +118,17 @@ class MobileBehaviorTests(TestCase):
     def test_no_enrollment_returns_empty_success(self):
         child = self.make_child("NoEnrollment", self.guardian)
         self.authenticate()
-        data = self.client.get(self.url(child)).data["data"]
+        response = self.client.get(self.url(child))
+        self.assertEqual(response.status_code, 200)
+        data = response.data["data"]
         self.assertIsNone(data["academic_year"])
         self.assertEqual(data["notes"], [])
-        self.assertEqual(data["summary"]["total_notes_count"], 0)
+        self.assertEqual(data["summary"], {
+            "total_notes_count": 0,
+            "positive_notes_count": 0,
+            "negative_notes_count": 0,
+        })
+        self.assertEqual(response.data["meta"]["pagination"]["count"], 0)
 
     def test_security_boundaries(self):
         self.authenticate()
@@ -139,3 +146,102 @@ class MobileBehaviorTests(TestCase):
         self.authenticate()
         for method in ("post", "put", "patch", "delete"):
             self.assertEqual(getattr(self.client, method)(self.url(), {}).status_code, 405)
+
+    def test_pagination_preserves_composite_contract_and_full_summary(self):
+        for index in range(35):
+            self.note(
+                BehaviorNote.Type.POSITIVE,
+                f"Positive {index}",
+                date(2026, 9, 1),
+            )
+        for index in range(25):
+            self.note(
+                BehaviorNote.Type.NEGATIVE,
+                f"Negative {index}",
+                date(2026, 8, 31),
+            )
+        self.authenticate()
+
+        first = self.client.get(self.url())
+        second = self.client.get(self.url(), {"page": 2})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertIsInstance(first.data["data"], dict)
+        self.assertEqual(
+            set(first.data["data"]),
+            {"student", "academic_year", "summary", "notes"},
+        )
+        self.assertIsInstance(first.data["data"]["notes"], list)
+        self.assertEqual(len(first.data["data"]["notes"]), 20)
+        self.assertEqual(first.data["data"]["summary"], {
+            "total_notes_count": 60,
+            "positive_notes_count": 35,
+            "negative_notes_count": 25,
+        })
+        self.assertEqual(
+            second.data["data"]["summary"],
+            first.data["data"]["summary"],
+        )
+        self.assertEqual(
+            first.data["code"],
+            "MOBILE_CHILD_BEHAVIOR_RETRIEVED",
+        )
+        self.assertEqual(
+            first.data["message"],
+            "\u062a\u0645 \u062c\u0644\u0628 \u0627\u0644\u0645\u0644\u0627\u062d\u0638\u0627\u062a "
+            "\u0627\u0644\u0633\u0644\u0648\u0643\u064a\u0629 \u0644\u0644\u0637\u0627\u0644\u0628 "
+            "\u0628\u0646\u062c\u0627\u062d.",
+        )
+        pagination = first.data["meta"]["pagination"]
+        self.assertEqual(pagination["count"], 60)
+        self.assertIsNotNone(pagination["next"])
+        self.assertIsNone(pagination["previous"])
+        self.assertIsNotNone(second.data["meta"]["pagination"]["previous"])
+        first_ids = {item["id"] for item in first.data["data"]["notes"]}
+        second_ids = {item["id"] for item in second.data["data"]["notes"]}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertEqual(
+            first.data["meta"]["requester_role"]["code"],
+            User.Role.GUARDIAN,
+        )
+
+    def test_page_size_query_parameter_and_maximum(self):
+        for index in range(58):
+            self.note(
+                BehaviorNote.Type.POSITIVE,
+                f"Sized {index}",
+                date(2026, 9, 1),
+            )
+        self.authenticate()
+
+        thirty = self.client.get(self.url(), {"page_size": 30})
+        capped = self.client.get(self.url(), {"page_size": 100})
+
+        self.assertEqual(len(thirty.data["data"]["notes"]), 30)
+        self.assertEqual(thirty.data["meta"]["pagination"]["page_size"], 30)
+        self.assertEqual(len(capped.data["data"]["notes"]), 50)
+        self.assertEqual(capped.data["meta"]["pagination"]["page_size"], 50)
+
+    def test_deterministic_ordering_across_pages(self):
+        for index in range(23):
+            self.note(
+                BehaviorNote.Type.POSITIVE,
+                f"Ordered {index}",
+                date(2026, 9, 1),
+            )
+        self.authenticate()
+
+        first = self.client.get(self.url())
+        second = self.client.get(self.url(), {"page": 2})
+        actual_ids = [
+            item["id"]
+            for item in first.data["data"]["notes"] + second.data["data"]["notes"]
+        ]
+        expected_ids = [
+            str(note_id)
+            for note_id in BehaviorNote.objects.filter(enrollment=self.enrollment)
+            .order_by("-occurred_on", "-created_at", "-id")
+            .values_list("id", flat=True)
+        ]
+
+        self.assertEqual(actual_ids, expected_ids)

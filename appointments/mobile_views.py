@@ -50,7 +50,9 @@ class MobileAppointmentRequestViewSet(
     }
 
     def get_queryset(self):
-        return AppointmentRequest.objects.filter(guardian=self.request.user)
+        return AppointmentRequest.objects.filter(
+            guardian=self.request.user
+        ).order_by("-created_at", "-id")
 
     def perform_create(self, serializer):
         serializer.save(

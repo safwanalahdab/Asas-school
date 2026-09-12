@@ -170,6 +170,36 @@ class MobileNotificationApiTests(TestCase):
         self.assertEqual(len(second.data["data"]["results"]), 10)
         self.assertEqual(len(capped.data["data"]["results"]), 100)
 
+    def test_pagination_is_stable_when_created_at_values_match(self):
+        for index in range(23):
+            self.make_notification(title=f"Tied {index}")
+        tied_time = timezone.now()
+        Notification.objects.filter(recipient=self.guardian).update(
+            created_at=tied_time
+        )
+        self.authenticate()
+
+        first = self.client.get(self.list_url)
+        second = self.client.get(f"{self.list_url}?page=2")
+        actual_ids = [
+            item["id"]
+            for item in (
+                first.data["data"]["results"] + second.data["data"]["results"]
+            )
+        ]
+        expected_ids = [
+            str(notification_id)
+            for notification_id in Notification.objects.filter(
+                recipient=self.guardian
+            )
+            .order_by("-created_at", "-id")
+            .values_list("id", flat=True)
+        ]
+
+        self.assertEqual(first.data["data"]["count"], 25)
+        self.assertEqual(len(first.data["data"]["results"]), 20)
+        self.assertEqual(actual_ids, expected_ids)
+
     def test_list_meta_merges_counts_with_requester_role(self):
         self.authenticate()
         response = self.client.get(f"{self.list_url}?page_size=1")

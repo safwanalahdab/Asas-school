@@ -85,7 +85,7 @@ class MobileNotificationViewSet(
     def get_queryset(self):
         return Notification.objects.filter(
             recipient=self.request.user,
-        ).select_related("student")
+        ).select_related("student").order_by("-created_at", "-id")
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())

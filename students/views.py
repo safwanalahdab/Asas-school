@@ -1,14 +1,17 @@
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema, inline_serializer
 
-from rest_framework import status, viewsets
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from config.api_responses import ArabicApiResponseMixin
+from rest_framework.views import APIView
+from config.api_responses import ArabicApiResponseMixin, success_response
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from django.db import transaction
@@ -29,17 +32,25 @@ from .models import (
     Student,
 )
 from .permissions import (
+    CanManageStudentHealthProfile,
+    CanRegisterStudent,
     EnrollmentPermission,
     GuardianStudentPermission,
     StudentPermission,
 )
+from .health_serializers import StudentHealthProfileSerializer
+from .registration_serializers import StudentRegistrationSerializer
 from .serializers import (
     EnrollmentSerializer,
     GuardianStudentSerializer,
     StudentSerializer,
     TransferEnrollmentSerializer,
 )
-from .services import transfer_student_between_sections
+from .services import (
+    ensure_student_health_profile,
+    register_student,
+    transfer_student_between_sections,
+)
 
 from finance.services import (
     ensure_financial_account_for_enrollment,
@@ -58,6 +69,112 @@ class _AtomicCrudMixin:
     @transaction.atomic
     def perform_destroy(self, instance):
         instance.delete()
+
+
+class StudentRegistrationView(ArabicApiResponseMixin, APIView):
+    permission_classes = [
+        IsAuthenticated,
+        IsWebDashboardUser,
+        CanRegisterStudent,
+    ]
+
+    @extend_schema(
+        request=StudentRegistrationSerializer,
+        responses={
+            status.HTTP_201_CREATED: inline_serializer(
+                name="StudentRegistrationResponse",
+                fields={
+                    "student": StudentSerializer(),
+                    "guardian_account": inline_serializer(
+                        name="StudentRegistrationGuardianAccountResponse",
+                        fields={
+                            "status": serializers.ChoiceField(
+                                choices=(
+                                    "created",
+                                    "linked_existing",
+                                    "not_created",
+                                )
+                            ),
+                            "username": serializers.CharField(allow_null=True),
+                            "temporary_password": serializers.CharField(
+                                allow_null=True
+                            ),
+                        },
+                    ),
+                },
+            ),
+        },
+    )
+    def post(self, request):
+        serializer = StudentRegistrationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        result = register_student(
+            student_data=validated_data["student"],
+            health_profile_data=validated_data.get("health_profile"),
+            guardian_data=validated_data.get("guardian"),
+        )
+
+        return success_response(
+            code="STUDENT_REGISTERED",
+            message="تم تسجيل الطالب بنجاح.",
+            data={
+                "student": StudentSerializer(
+                    result["student"],
+                    context={"request": request},
+                ).data,
+                "guardian_account": result["guardian_account"],
+            },
+            status_code=status.HTTP_201_CREATED,
+        )
+
+
+class StudentHealthProfileView(ArabicApiResponseMixin, APIView):
+    permission_classes = [
+        IsAuthenticated,
+        IsWebDashboardUser,
+        CanManageStudentHealthProfile,
+    ]
+    http_method_names = ["get", "patch", "head", "options"]
+    response_messages = {
+        "get": (
+            "HEALTH_PROFILE_RETRIEVED",
+            "تم جلب الملف الصحي للطالب بنجاح.",
+        ),
+        "patch": (
+            "HEALTH_PROFILE_UPDATED",
+            "تم تحديث الملف الصحي للطالب بنجاح.",
+        ),
+    }
+
+    def get_profile(self):
+        student = get_object_or_404(Student, pk=self.kwargs["student_id"])
+        return ensure_student_health_profile(student)
+
+    @extend_schema(responses=StudentHealthProfileSerializer)
+    def get(self, request, student_id):
+        serializer = StudentHealthProfileSerializer(
+            self.get_profile(),
+            context={"request": request},
+        )
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        request=StudentHealthProfileSerializer,
+        responses=StudentHealthProfileSerializer,
+    )
+    @transaction.atomic
+    def patch(self, request, student_id):
+        serializer = StudentHealthProfileSerializer(
+            self.get_profile(),
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class StudentViewSet(
@@ -109,6 +226,11 @@ class StudentViewSet(
         "first_name",
         "last_name",
     ]
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        student = serializer.save()
+        ensure_student_health_profile(student)
 
     def get_queryset(self):
         queryset = super().get_queryset()

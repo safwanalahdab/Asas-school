@@ -258,6 +258,123 @@ class MobileHomeworkApiTests(TestCase):
     def test_related_data_has_no_n_plus_one(self):
         self.create_homework(self.assignment, "إضافي", date(2026, 10, 14))
         self.authenticate()
-        with self.assertNumQueries(4):
+        with self.assertNumQueries(5):
             response = self.client.get(self.url())
             self.assertEqual(response.status_code, 200)
+
+    def test_default_pagination_contract_and_metadata(self):
+        for index in range(23):
+            self.create_homework(
+                self.assignment,
+                f"Paginated homework {index}",
+                date(2026, 11, 1),
+            )
+        self.authenticate()
+
+        response = self.client.get(self.url())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.data["data"], list)
+        self.assertEqual(len(response.data["data"]), 20)
+        self.assertEqual(response.data["code"], "MOBILE_CHILD_HOMEWORK_RETRIEVED")
+        self.assertEqual(
+            response.data["message"],
+            "\u062a\u0645 \u062c\u0644\u0628 \u0648\u0627\u062c\u0628\u0627\u062a "
+            "\u0627\u0644\u0637\u0627\u0644\u0628 \u0628\u0646\u062c\u0627\u062d.",
+        )
+        pagination = response.data["meta"]["pagination"]
+        self.assertEqual(pagination["count"], 25)
+        self.assertIsNotNone(pagination["next"])
+        self.assertIsNone(pagination["previous"])
+        self.assertEqual(pagination["page"], 1)
+        self.assertEqual(pagination["page_size"], 20)
+        self.assertEqual(pagination["total_pages"], 2)
+        self.assertEqual(
+            response.data["meta"]["requester_role"]["code"],
+            User.Role.GUARDIAN,
+        )
+
+    def test_second_page_does_not_overlap_and_has_navigation_links(self):
+        for index in range(23):
+            self.create_homework(
+                self.assignment,
+                f"Second page homework {index}",
+                date(2026, 11, 1),
+            )
+        self.authenticate()
+
+        first = self.client.get(self.url())
+        second = self.client.get(self.url(), {"page": 2})
+
+        first_ids = {item["id"] for item in first.data["data"]}
+        second_ids = {item["id"] for item in second.data["data"]}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertIsNotNone(second.data["meta"]["pagination"]["previous"])
+        self.assertIsNone(second.data["meta"]["pagination"]["next"])
+
+    def test_page_size_query_parameter_and_maximum(self):
+        for index in range(58):
+            self.create_homework(
+                self.assignment,
+                f"Sized homework {index}",
+                date(2026, 11, 1),
+            )
+        self.authenticate()
+
+        thirty = self.client.get(self.url(), {"page_size": 30})
+        capped = self.client.get(self.url(), {"page_size": 100})
+
+        self.assertEqual(len(thirty.data["data"]), 30)
+        self.assertEqual(thirty.data["meta"]["pagination"]["page_size"], 30)
+        self.assertEqual(len(capped.data["data"]), 50)
+        self.assertEqual(capped.data["meta"]["pagination"]["page_size"], 50)
+
+    def test_filters_are_applied_before_pagination(self):
+        for index in range(21):
+            self.create_homework(
+                self.assignment,
+                f"Filtered math homework {index}",
+                date(2026, 11, 1),
+            )
+        for index in range(5):
+            self.create_homework(
+                self.science_assignment,
+                f"Filtered science homework {index}",
+                date(2026, 12, 1),
+            )
+        self.authenticate()
+
+        by_date = self.client.get(
+            self.url(),
+            {"date_from": "2026-11-01", "date_to": "2026-11-30"},
+        )
+        by_subject = self.client.get(self.url(), {"subject": str(self.science.id)})
+
+        self.assertEqual(by_date.data["meta"]["pagination"]["count"], 21)
+        self.assertEqual(by_subject.data["meta"]["pagination"]["count"], 6)
+
+    def test_ordering_is_deterministic_across_pages(self):
+        for index in range(23):
+            self.create_homework(
+                self.assignment,
+                f"Ordered homework {index}",
+                date(2026, 11, 1),
+            )
+        self.authenticate()
+
+        first = self.client.get(self.url())
+        second = self.client.get(self.url(), {"page": 2})
+        actual_ids = [
+            item["id"] for item in first.data["data"] + second.data["data"]
+        ]
+        expected_ids = [
+            str(homework_id)
+            for homework_id in Homework.objects.filter(
+                teacher_assignment__section=self.section,
+                teacher_assignment__grade_subject__academic_year=self.active_year,
+            )
+            .order_by("-homework_date", "-created_at", "-id")
+            .values_list("id", flat=True)
+        ]
+
+        self.assertEqual(actual_ids, expected_ids)

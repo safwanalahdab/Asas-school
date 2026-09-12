@@ -194,6 +194,57 @@ class MobileAppointmentRequestTests(TestCase):
         ids = [item["id"] for item in self.items(self.client.get(self.list_url))]
         self.assertEqual(ids[:2], [str(newer.id), str(older.id)])
 
+    def test_owned_filtered_pagination_is_stable_for_tied_timestamps(self):
+        pending = [
+            self.create_appointment(request_reason=f"Pending {index}")
+            for index in range(23)
+        ]
+        now = timezone.now()
+        approved = [
+            self.create_appointment(
+                request_reason=f"Approved {index}",
+                status=AppointmentRequest.Status.APPROVED,
+                decision_reason="",
+                decided_by=self.admin,
+                decided_at=now,
+            )
+            for index in range(2)
+        ]
+        other = self.create_appointment(guardian=self.other_guardian)
+        AppointmentRequest.objects.filter(
+            id__in=[item.id for item in pending + approved] + [other.id]
+        ).update(created_at=now)
+        self.authenticate()
+
+        first = self.client.get(f"{self.list_url}?status=pending")
+        second = self.client.get(f"{self.list_url}?status=pending&page=2")
+        self.assertEqual(
+            set(first.data["data"]),
+            {"count", "next", "previous", "results"},
+        )
+        self.assertEqual(first.data["data"]["count"], 23)
+        self.assertEqual(len(first.data["data"]["results"]), 20)
+        first_ids = {item["id"] for item in first.data["data"]["results"]}
+        second_ids = {item["id"] for item in second.data["data"]["results"]}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+        self.assertNotIn(str(other.id), first_ids | second_ids)
+        actual_ids = [
+            item["id"]
+            for item in (
+                first.data["data"]["results"] + second.data["data"]["results"]
+            )
+        ]
+        expected_ids = [
+            str(appointment_id)
+            for appointment_id in AppointmentRequest.objects.filter(
+                guardian=self.guardian,
+                status=AppointmentRequest.Status.PENDING,
+            )
+            .order_by("-created_at", "-id")
+            .values_list("id", flat=True)
+        ]
+        self.assertEqual(actual_ids, expected_ids)
+
     def test_authentication_web_token_and_password_gate(self):
         self.assertEqual(self.client.get(self.list_url).status_code, 401)
         self.authenticate(client="web")

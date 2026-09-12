@@ -21,8 +21,23 @@ class MobileAnnouncementSerializer(serializers.ModelSerializer):
         return True
 
 
+class MobileAnnouncementRequesterRoleSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    label = serializers.CharField()
+
+
+class MobileAnnouncementPaginationSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    page = serializers.IntegerField()
+    page_size = serializers.IntegerField()
+    total_pages = serializers.IntegerField()
+
+
 class MobileAnnouncementMetaSerializer(serializers.Serializer):
-    requester_role = serializers.JSONField(allow_null=True)
+    requester_role = MobileAnnouncementRequesterRoleSerializer(allow_null=True)
+    pagination = MobileAnnouncementPaginationSerializer(required=False)
 
 
 class MobileAnnouncementsResponseSerializer(serializers.Serializer):
