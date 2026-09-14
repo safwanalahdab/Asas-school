@@ -81,6 +81,10 @@ class SchoolRequest(models.Model):
     class Meta:
         db_table = "school_requests_request"
 
+        permissions = [
+            ("reply_to_request", "الرد على طلب مدرسي"),
+        ]
+
         ordering = [
             "-created_at",
         ]

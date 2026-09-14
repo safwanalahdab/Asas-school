@@ -72,6 +72,11 @@ class Student(models.Model):
     class Meta:
         db_table = "students_student"
 
+        permissions = [
+            ("register_student", "تسجيل طالب"),
+            ("transfer_student", "نقل طالب بين الشعب"),
+        ]
+
         ordering = [
             "first_name",
             "last_name",

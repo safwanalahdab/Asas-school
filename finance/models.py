@@ -209,6 +209,10 @@ class StudentDiscount(models.Model):
     class Meta:
         db_table = "finance_student_discount"
 
+        permissions = [
+            ("cancel_discount", "إلغاء حسم"),
+        ]
+
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(
@@ -356,6 +360,10 @@ class Payment(models.Model):
 
     class Meta:
         db_table = "finance_payment"
+
+        permissions = [
+            ("cancel_payment", "إلغاء دفعة"),
+        ]
 
         constraints = [
             models.CheckConstraint(

@@ -103,6 +103,11 @@ class User(AbstractUser):
     objects = UserManager()
 
     class Meta:
+        permissions = [
+            ("manage_user_permissions", "إدارة صلاحيات المستخدمين"),
+            ("reset_user_password", "إعادة تعيين كلمة مرور المستخدم"),
+            ("set_user_active", "تغيير حالة حساب المستخدم"),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=(

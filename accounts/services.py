@@ -1,14 +1,167 @@
 import secrets
 from datetime import timedelta
 
+from django.contrib.auth.models import Permission
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
+from rest_framework.exceptions import NotFound, PermissionDenied
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
+from accounts.permission_catalog import (
+    ALL_MANAGEABLE_PERMISSIONS,
+    direct_business_permission_codes,
+)
 
 
 TEMPORARY_PASSWORD_TTL = timedelta(hours=72)
+
+
+def apply_default_role_permissions(user):
+    from accounts.role_permission_templates import ROLE_PERMISSION_TEMPLATES
+
+    if user.is_superuser:
+        return
+    if not user.role or user.role not in ROLE_PERMISSION_TEMPLATES:
+        raise ValueError("A valid role is required to apply default permissions.")
+
+    permission_codes = ROLE_PERMISSION_TEMPLATES[user.role]
+    query = Q()
+    for permission_code in permission_codes:
+        app_label, codename = permission_code.split(".", 1)
+        query |= Q(
+            content_type__app_label=app_label,
+            codename=codename,
+        )
+
+    permissions = (
+        list(Permission.objects.filter(query).select_related("content_type"))
+        if permission_codes
+        else []
+    )
+    resolved_codes = {
+        f"{permission.content_type.app_label}.{permission.codename}"
+        for permission in permissions
+    }
+    missing_codes = permission_codes - resolved_codes
+    if missing_codes:
+        raise ImproperlyConfigured(
+            "Role template permissions are missing from Django: "
+            f"{sorted(missing_codes)}"
+        )
+
+    user.user_permissions.set(permissions)
+
+
+@transaction.atomic
+def replace_user_business_permissions(
+    *,
+    target_user_id,
+    permission_codes,
+    permission_objects,
+    actor,
+    ip_address=None,
+):
+    User = get_user_model()
+    active_admin_ids = list(
+        User.objects.select_for_update()
+        .filter(
+            role=User.Role.SCHOOL_ADMIN,
+            is_active=True,
+            is_superuser=False,
+        )
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    try:
+        target = User.objects.select_for_update().get(pk=target_user_id)
+    except User.DoesNotExist as exc:
+        raise NotFound(
+            {
+                "code": "USER_NOT_FOUND",
+                "detail": "المستخدم المطلوب غير موجود.",
+            }
+        ) from exc
+
+    if target.pk == actor.pk:
+        raise PermissionDenied(
+            {
+                "code": "USER_PERMISSION_SELF_EDIT_FORBIDDEN",
+                "detail": "لا يمكنك تعديل صلاحيات حسابك بنفسك.",
+            }
+        )
+    if target.is_superuser:
+        raise PermissionDenied(
+            {
+                "code": "SUPERUSER_PERMISSION_MANAGEMENT_FORBIDDEN",
+                "detail": "لا يمكن إدارة صلاحيات المدير العام المباشرة.",
+            }
+        )
+
+    before_permissions = direct_business_permission_codes(target)
+    before_set = set(before_permissions)
+    after_set = set(permission_codes)
+    manager_permission = "accounts.manage_user_permissions"
+
+    removes_last_manager = (
+        target.is_active
+        and target.role == User.Role.SCHOOL_ADMIN
+        and manager_permission in before_set
+        and manager_permission not in after_set
+    )
+    if removes_last_manager:
+        another_manager_exists = User.objects.filter(
+            pk__in=active_admin_ids,
+            user_permissions__content_type__app_label="accounts",
+            user_permissions__codename="manage_user_permissions",
+        ).exclude(pk=target.pk).exists()
+        if not another_manager_exists:
+            raise PermissionDenied(
+                {
+                    "code": "LAST_PERMISSION_MANAGER_REQUIRED",
+                    "detail": "لا يمكن إزالة صلاحية إدارة المستخدمين من آخر مدير مدرسة فعّال يملكها.",
+                }
+            )
+
+    added_permissions = sorted(after_set - before_set)
+    removed_permissions = sorted(before_set - after_set)
+    if not added_permissions and not removed_permissions:
+        return target, False
+
+    direct_permissions = list(
+        target.user_permissions.select_related("content_type")
+    )
+    unmanaged_permissions = [
+        permission
+        for permission in direct_permissions
+        if (
+            f"{permission.content_type.app_label}.{permission.codename}"
+            not in ALL_MANAGEABLE_PERMISSIONS
+        )
+    ]
+    target.user_permissions.set([*unmanaged_permissions, *permission_objects])
+
+    after_permissions = direct_business_permission_codes(target)
+    record_audit_event(
+        actor=actor,
+        module=AuditLog.Module.ACCOUNTS,
+        action=AuditLog.Action.UPDATE,
+        message=(
+            f"عدّل {get_actor_display(actor)} صلاحيات المستخدم "
+            f"{get_actor_display(target)}."
+        ),
+        target=target,
+        metadata={
+            "before_permissions": before_permissions,
+            "after_permissions": after_permissions,
+            "added_permissions": added_permissions,
+            "removed_permissions": removed_permissions,
+        },
+        ip_address=ip_address,
+    )
+    return target, True
 
 
 def generate_temporary_password():

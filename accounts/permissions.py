@@ -5,6 +5,42 @@ from accounts.policies import (
     can_create_accounts,
     can_view_accounts,
 )
+from accounts.permission_catalog import ALL_MANAGEABLE_PERMISSIONS
+
+
+def has_direct_permission(user, permission_code):
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    if not user.is_active:
+        return False
+    if user.is_superuser:
+        return True
+    if permission_code not in ALL_MANAGEABLE_PERMISSIONS:
+        return False
+
+    app_label, codename = permission_code.split(".", 1)
+    return user.user_permissions.filter(
+        content_type__app_label=app_label,
+        codename=codename,
+    ).exists()
+
+
+class CanManageUserPermissions(BasePermission):
+    message = {
+        "code": "USER_PERMISSION_MANAGEMENT_FORBIDDEN",
+        "detail": "ليس لديك صلاحية لإدارة صلاحيات المستخدمين.",
+    }
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated or not user.is_active:
+            return False
+        if user.is_superuser:
+            return True
+        return bool(
+            user.role == user.Role.SCHOOL_ADMIN
+            and has_direct_permission(user, "accounts.manage_user_permissions")
+        )
 
 
 class IsWebDashboardUser(BasePermission):

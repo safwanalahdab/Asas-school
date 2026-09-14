@@ -44,6 +44,7 @@ from accounts.serializers import (
     UserDetailSerializer,
     UserListSerializer,
     WebMeUpdateSerializer,
+    WebMeSerializer,
     UserSummarySerializer,
     UserUpdateSerializer,
     WebLoginResponseSerializer,
@@ -299,7 +300,7 @@ class WebMeView(ArabicApiResponseMixin, APIView):
 
     @extend_schema(
         responses={
-            status.HTTP_200_OK: UserSummarySerializer,
+            status.HTTP_200_OK: WebMeSerializer,
         },
     )
     def get(self, request):
@@ -307,7 +308,7 @@ class WebMeView(ArabicApiResponseMixin, APIView):
             {
                 "code": "CURRENT_USER_RETRIEVED",
                 "detail": "تم جلب بيانات المستخدم بنجاح.",
-                **UserSummarySerializer(request.user).data,
+                **WebMeSerializer(request.user).data,
             },
             status=status.HTTP_200_OK,
         )

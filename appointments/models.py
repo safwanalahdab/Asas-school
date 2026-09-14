@@ -64,6 +64,10 @@ class AppointmentRequest(models.Model):
     class Meta:
         db_table = "appointments_request"
 
+        permissions = [
+            ("decide_appointment_request", "اتخاذ قرار بشأن طلب موعد"),
+        ]
+
         ordering = [
             "-created_at",
         ]

@@ -20,6 +20,10 @@ class Assessment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        permissions = [
+            ("publish_grades", "نشر العلامات"),
+            ("create_grade_wide_assessment", "إنشاء تقييم لجميع شعب الصف"),
+        ]
         db_table = "grades_assessment"
         ordering = ["-assessment_date", "-created_at"]
         constraints = [models.CheckConstraint(condition=models.Q(max_score__gt=0), name="gr_assess_max_positive")]

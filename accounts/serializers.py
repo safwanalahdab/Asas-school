@@ -28,6 +28,7 @@ from accounts.services import (
     increment_token_version,
     temporary_password_is_expired,
 )
+from accounts.permission_catalog import effective_business_permission_codes
 
 User = get_user_model()
 
@@ -479,6 +480,17 @@ class UserDetailSerializer(UserListSerializer):
     class Meta(UserListSerializer.Meta):
         fields = [*UserListSerializer.Meta.fields, "last_login"]
         read_only_fields = fields
+
+
+class WebMeSerializer(UserSummarySerializer):
+    permissions = serializers.SerializerMethodField()
+
+    class Meta(UserSummarySerializer.Meta):
+        fields = [*UserSummarySerializer.Meta.fields, "permissions"]
+        read_only_fields = fields
+
+    def get_permissions(self, user):
+        return effective_business_permission_codes(user)
 
 
 class WebMeUpdateSerializer(serializers.ModelSerializer):
