@@ -1,4 +1,4 @@
-from django.db.models import Prefetch
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.utils import timezone
 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -10,12 +10,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.models import User
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from teaching.models import TeacherAssignment
 from config.api_responses import ArabicApiResponseMixin
 
 from .filters import AttendanceRecordFilter, AttendanceSheetFilter
 from .models import AttendanceRecord, AttendanceSheet
-from .permissions import AttendanceRecordPermission, AttendanceSheetPermission
+from .permissions import IsWebClientToken
 from .serializers import (
     AttendanceRecordSerializer,
     AttendanceRosterQuerySerializer,
@@ -29,6 +30,7 @@ from .services import (
     apply_normal_departure,
     bulk_update_attendance,
     create_attendance_sheet,
+    ensure_actor_can_manage_attendance_scope,
     get_effective_attendance_roster,
     update_attendance_record,
 )
@@ -62,9 +64,19 @@ class AttendanceSheetViewSet(
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        AttendanceSheetPermission,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "attendance.view_attendancesheet",
+        "retrieve": "attendance.view_attendancesheet",
+        "roster": "attendance.view_attendancesheet",
+        "create": "attendance.add_attendancesheet",
+        "bulk_update": "attendance.change_attendancerecord",
+        "normal_departure": "attendance.change_attendancesheet",
+    }
 
     http_method_names = [
         "get",
@@ -123,13 +135,18 @@ class AttendanceSheetViewSet(
         if not user.is_authenticated:
             return queryset.none()
 
-        if user.is_superuser or user.role in {
-            User.Role.SUPERVISOR,
-            User.Role.SCHOOL_ADMIN,
-        }:
+        if user.is_superuser or user.role != User.Role.TEACHER:
             return queryset
 
-        return queryset.none()
+        today = timezone.localdate()
+        active_assignments = TeacherAssignment.objects.filter(
+            teacher=user,
+            section_id=OuterRef("section_id"),
+            start_date__lte=today,
+        ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
+        return queryset.annotate(
+            teacher_has_access=Exists(active_assignments)
+        ).filter(teacher_has_access=True)
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -175,6 +192,10 @@ class AttendanceSheetViewSet(
     def roster(self, request):
         query_serializer = AttendanceRosterQuerySerializer(data=request.query_params)
         query_serializer.is_valid(raise_exception=True)
+        ensure_actor_can_manage_attendance_scope(
+            actor=request.user,
+            section=query_serializer.validated_data["section"],
+        )
         roster = get_effective_attendance_roster(
             section=query_serializer.validated_data["section"],
             attendance_date=timezone.localdate(),
@@ -303,9 +324,16 @@ class AttendanceRecordViewSet(
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        AttendanceRecordPermission,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "attendance.view_attendancerecord",
+        "retrieve": "attendance.view_attendancerecord",
+        "partial_update": "attendance.change_attendancerecord",
+    }
 
     http_method_names = [
         "get",
@@ -353,13 +381,18 @@ class AttendanceRecordViewSet(
         if not user.is_authenticated:
             return queryset.none()
 
-        if user.is_superuser or user.role in {
-            User.Role.SUPERVISOR,
-            User.Role.SCHOOL_ADMIN,
-        }:
+        if user.is_superuser or user.role != User.Role.TEACHER:
             return queryset
 
-        return queryset.none()
+        today = timezone.localdate()
+        active_assignments = TeacherAssignment.objects.filter(
+            teacher=user,
+            section_id=OuterRef("sheet__section_id"),
+            start_date__lte=today,
+        ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
+        return queryset.annotate(
+            teacher_has_access=Exists(active_assignments)
+        ).filter(teacher_has_access=True)
 
     def partial_update(self, request, *args, **kwargs):
         record = self.get_object()

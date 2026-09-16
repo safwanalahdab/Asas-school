@@ -17,7 +17,7 @@ from rest_framework.viewsets import (
     ModelViewSet,
 )
 
-from accounts.permissions import PasswordChangeGate
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from config.api_responses import ArabicApiResponseMixin
@@ -31,10 +31,6 @@ from .models import (
     Payment,
     StudentDiscount,
     StudentFinancialAccount,
-)
-from .permissions import (
-    CanAccessFinancialAccounts,
-    CanManageTuitionPlans,
 )
 from .serializers import (
     AddDiscountSerializer,
@@ -77,11 +73,17 @@ class GradeTuitionPlanViewSet(
     )
 
     serializer_class = GradeTuitionPlanSerializer
+    action_permissions = {
+        "list": "finance.view_gradetuitionplan",
+        "retrieve": "finance.view_gradetuitionplan",
+        "create": "finance.add_gradetuitionplan",
+        "partial_update": "finance.change_gradetuitionplan",
+    }
 
     permission_classes = [
         IsAuthenticated,
         PasswordChangeGate,
-        CanManageTuitionPlans,
+        ActionBusinessPermission,
     ]
 
     http_method_names = [
@@ -201,11 +203,20 @@ class StudentFinancialAccountViewSet(
             "payments__cancelled_by",
         )
     )
+    action_permissions = {
+        "list": "finance.view_studentfinancialaccount",
+        "retrieve": "finance.view_studentfinancialaccount",
+        "remaining_syp_preview": "finance.view_studentfinancialaccount",
+        "record_payment": "finance.add_payment",
+        "cancel_payment": "finance.cancel_payment",
+        "add_discount": "finance.add_studentdiscount",
+        "cancel_discount": "finance.cancel_discount",
+    }
 
     permission_classes = [
         IsAuthenticated,
         PasswordChangeGate,
-        CanAccessFinancialAccounts,
+        ActionBusinessPermission,
     ]
 
     http_method_names = [
@@ -299,20 +310,14 @@ class StudentFinancialAccountViewSet(
         if user.is_superuser:
             return queryset
 
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SECRETARIAT,
-        }:
-            return queryset
-
         if user.role == User.Role.GUARDIAN:
             return queryset.filter(
                 enrollment__student__guardian_link__guardian=user,
                 enrollment__student__guardian_link__is_active=True,
                 enrollment__student__is_active=True,
-            )
+            ).distinct()
 
-        return queryset.none()
+        return queryset
 
     @extend_schema(
         request=AddDiscountSerializer,

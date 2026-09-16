@@ -4,12 +4,12 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from config.api_responses import ArabicApiResponseMixin
 
 from .models import Homework
+from .permissions import IsWebClientToken
 
-from .permissions import CanAccessHomework
 from .serializers import HomeworkSerializer
 from .services import notify_homework_created
 
@@ -34,11 +34,19 @@ class HomeworkViewSet(
     )
 
     serializer_class = HomeworkSerializer
+    action_permissions = {
+        "list": "homework.view_homework",
+        "retrieve": "homework.view_homework",
+        "create": "homework.add_homework",
+        "partial_update": "homework.change_homework",
+        "destroy": "homework.delete_homework",
+    }
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        CanAccessHomework,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
 
     filterset_class = HomeworkFilter
@@ -82,29 +90,17 @@ class HomeworkViewSet(
         if user.is_superuser:
             return queryset
 
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-        }:
-            return queryset
-
         if user.role == User.Role.TEACHER:
             return queryset.filter(
                 teacher_assignment__teacher=user,
             )
 
-        return queryset.none()
+        return queryset
 
     def validate_teacher_assignment_access(self, serializer):
         user = self.request.user
 
         if user.is_superuser:
-            return
-
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-        }:
             return
 
         if user.role != User.Role.TEACHER:

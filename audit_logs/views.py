@@ -4,12 +4,12 @@ from rest_framework import mixins, viewsets
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from behavior.permissions import IsWebClientToken
 from config.api_responses import ArabicApiResponseMixin
 
 from .filters import AuditLogFilter
 from .models import AuditLog
-from .permissions import CanViewAuditLogs
 from .serializers import AuditLogSerializer
 
 
@@ -25,7 +25,16 @@ class AuditLogViewSet(
 ):
     queryset = AuditLog.objects.select_related("actor").all()
     serializer_class = AuditLogSerializer
-    permission_classes = [IsAuthenticated, IsWebDashboardUser, CanViewAuditLogs]
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
+    ]
+    action_permissions = {
+        "list": "audit_logs.view_auditlog",
+        "retrieve": "audit_logs.view_auditlog",
+    }
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = AuditLogFilter
     search_fields = ["actor_display", "message", "target_display"]

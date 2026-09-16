@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 
-from accounts.permissions import PasswordChangeGate
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from academics.models import AcademicYear
 from config.api_responses import ArabicApiResponseMixin
 from students.models import Enrollment
@@ -14,7 +14,6 @@ from teaching.models import TeacherAssignment
 
 from .filters import AnnouncementFilter
 from .models import Announcement
-from .permissions import CanAccessAnnouncements
 from .serializers import AnnouncementSerializer
 from .services import notify_announcement_published
 
@@ -38,11 +37,18 @@ class AnnouncementViewSet(
     )
 
     serializer_class = AnnouncementSerializer
+    action_permissions = {
+        "list": "announcements.view_announcement",
+        "retrieve": "announcements.view_announcement",
+        "create": "announcements.add_announcement",
+        "partial_update": "announcements.change_announcement",
+        "destroy": "announcements.delete_announcement",
+    }
 
     permission_classes = [
         IsAuthenticated,
         PasswordChangeGate,
-        CanAccessAnnouncements,
+        ActionBusinessPermission,
     ]
 
     http_method_names = [
@@ -102,13 +108,6 @@ class AnnouncementViewSet(
         user = self.request.user
 
         if user.is_superuser:
-            return queryset
-
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-            User.Role.SECRETARIAT,
-        }:
             return queryset
 
         today = timezone.localdate()
@@ -196,7 +195,7 @@ class AnnouncementViewSet(
                 allowed_scope,
             ).distinct()
 
-        return queryset.none()
+        return queryset
 
     @transaction.atomic
     def perform_create(self, serializer):

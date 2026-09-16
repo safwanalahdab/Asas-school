@@ -28,7 +28,7 @@ from accounts.cookies import (
     delete_auth_cookies,
     set_auth_cookies,
 )
-from accounts.permissions import CanViewAccounts, IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, IsWebDashboardUser
 from accounts.policies import (
     can_reset_account_password,
     can_set_account_active,
@@ -399,7 +399,20 @@ class UserViewSet(
     - تقييد النتائج حسب دور المستخدم الحالي
     """
 
-    permission_classes = [IsAuthenticated, IsWebDashboardUser, CanViewAccounts]
+    permission_classes = [
+        IsAuthenticated,
+        IsWebDashboardUser,
+        ActionBusinessPermission,
+    ]
+    action_permissions = {
+        "list": "accounts.view_user",
+        "retrieve": "accounts.view_user",
+        "create": "accounts.add_user",
+        "update": "accounts.change_user",
+        "partial_update": "accounts.change_user",
+        "set_active": "accounts.set_user_active",
+        "reset_password": "accounts.reset_user_password",
+    }
     http_method_names = ["get", "post", "patch", "head", "options"]
 
     filter_backends = [

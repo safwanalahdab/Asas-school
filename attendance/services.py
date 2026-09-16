@@ -3,15 +3,37 @@ from datetime import datetime, time, timedelta
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from academics.models import Section
+from accounts.models import User
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from notifications.services import create_notification
 from students.models import Enrollment, GuardianStudent, StudentAuditLog
+from teaching.models import TeacherAssignment
 from .domain import ATTENDANCE_FIELDS, normalize_and_validate_record
 from .models import AttendanceRecord, AttendanceSheet
+
+
+def teacher_has_active_section_assignment(*, teacher, section):
+    today = timezone.localdate()
+    return TeacherAssignment.objects.filter(
+        teacher=teacher,
+        section=section,
+        start_date__lte=today,
+    ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today)).exists()
+
+
+def ensure_actor_can_manage_attendance_scope(*, actor, section):
+    if actor.role != User.Role.TEACHER:
+        return
+    if teacher_has_active_section_assignment(teacher=actor, section=section):
+        return
+    raise PermissionDenied({
+        "code": "ATTENDANCE_ASSIGNMENT_REQUIRED",
+        "detail": "ليس لديك تكليف فعال لإدارة حضور هذه الشعبة.",
+    })
 
 
 def _notify_final_absences(records):
@@ -86,6 +108,7 @@ def create_attendance_sheet(*, section, actor, records):
     if today.weekday() in {4, 5}:
         raise ValidationError({"code": "ATTENDANCE_NOT_ALLOWED_ON_WEEKEND", "detail": "لا يمكن تسجيل الحضور يومي الجمعة والسبت."})
     section = Section.objects.select_for_update().get(pk=section.pk)
+    ensure_actor_can_manage_attendance_scope(actor=actor, section=section)
     if AttendanceSheet.objects.filter(section=section, attendance_date=today).exists():
         raise ValidationError({"code": "ATTENDANCE_SHEET_ALREADY_EXISTS", "detail": "تم أخذ حضور هذه الشعبة مسبقًا لهذا اليوم."})
 

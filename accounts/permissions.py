@@ -2,8 +2,6 @@ from rest_framework.permissions import BasePermission
 
 from accounts.policies import (
     can_access_web_dashboard,
-    can_create_accounts,
-    can_view_accounts,
 )
 from accounts.permission_catalog import ALL_MANAGEABLE_PERMISSIONS
 
@@ -23,6 +21,36 @@ def has_direct_permission(user, permission_code):
         content_type__app_label=app_label,
         codename=codename,
     ).exists()
+
+
+class ActionBusinessPermission(BasePermission):
+    message = {
+        "code": "BUSINESS_PERMISSION_DENIED",
+        "detail": "ليس لديك صلاحية لتنفيذ هذه العملية.",
+    }
+
+    def has_permission(self, request, view):
+        # DRF checks permissions before dispatching to http_method_not_allowed.
+        # Let dispatch return 405 for methods the view does not support.
+        method_name = request.method.lower()
+        if method_name not in view.http_method_names:
+            return True
+        if method_name == "options":
+            return True
+        action_permissions = getattr(view, "action_permissions", {})
+        action_name = getattr(view, "action", None)
+        required_permission = action_permissions.get(action_name)
+        if required_permission is None:
+            method_permissions = getattr(view, "method_permissions", {})
+            permission_method = "get" if method_name == "head" else method_name
+            if (
+                action_name is None
+                and method_permissions
+                and not hasattr(view, permission_method)
+            ):
+                return True
+            required_permission = method_permissions.get(permission_method)
+        return bool(required_permission and has_direct_permission(request.user, required_permission))
 
 
 class CanManageUserPermissions(BasePermission):
@@ -89,39 +117,3 @@ class PasswordChangeGate(BasePermission):
             user and user.is_authenticated and user.must_change_password
             and not getattr(view, "allow_password_change_required", False)
         )
-
-
-class CanCreateAccounts(BasePermission):
-    message = {
-        "code": "ACCOUNT_CREATION_FORBIDDEN",
-        "detail": "ليس لديك صلاحية لإنشاء الحسابات.",
-    }
-
-    def has_permission(self, request, view):
-        return can_create_accounts(request.user)
-
-
-class CanResetPasswords(BasePermission):
-    message = {
-        "code": "PASSWORD_RESET_FORBIDDEN",
-        "detail": "ليس لديك صلاحية لإعادة تعيين كلمات المرور.",
-    }
-
-    def has_permission(self, request, view):
-        user = request.user
-        return bool(user.is_superuser or user.role == user.Role.SCHOOL_ADMIN)
-
-
-class CanViewAccounts(BasePermission):
-    """
-    تتحقق من أن المستخدم يملك صلاحية
-    فتح قائمة حسابات المستخدمين.
-    """
-
-    message = {
-        "code": "ACCOUNT_LIST_FORBIDDEN",
-        "detail": "ليس لديك صلاحية لعرض حسابات المستخدمين.",
-    }
-
-    def has_permission(self, request, view):
-        return can_view_accounts(request.user)

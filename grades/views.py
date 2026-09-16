@@ -23,18 +23,14 @@ from rest_framework.filters import (
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from config.api_responses import ArabicApiResponseMixin
 from teaching.models import TeacherAssignment
 
 from .filters import AssessmentFilter
 from academics.models import Section
 from .models import Assessment
-from .permissions import (
-    CanAccessGrades,
-    CanCreateGradeWideAssessment,
-    CanPublishGrades,
-)
+from .permissions import IsWebClientToken
 from .selectors import (
     get_assessment_score_rows,
     get_student_term_results,
@@ -94,9 +90,24 @@ class AssessmentViewSet(
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        CanAccessGrades,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "grades.view_assessment",
+        "retrieve": "grades.view_assessment",
+        "create": "grades.add_assessment",
+        "partial_update": "grades.change_assessment",
+        "destroy": "grades.delete_assessment",
+        "create_for_grade": "grades.create_grade_wide_assessment",
+        "scores_sheet": "grades.view_studentscore",
+        "bulk_scores": "grades.change_studentscore",
+        "publish_section": "grades.publish_grades",
+        "publish_grade": "grades.publish_grades",
+        "student_results": "grades.view_studentscore",
+    }
 
     filter_backends = [
         DjangoFilterBackend,
@@ -180,35 +191,6 @@ class AssessmentViewSet(
         ),
     }
 
-    def get_permissions(self):
-        permission_classes = list(
-            self.permission_classes
-        )
-
-        action_name = getattr(
-            self,
-            "action",
-            None,
-        )
-
-        if action_name in {
-            "publish_section",
-            "publish_grade",
-        }:
-            permission_classes.append(
-                CanPublishGrades
-            )
-
-        if action_name == "create_for_grade":
-            permission_classes.append(
-                CanCreateGradeWideAssessment
-            )
-
-        return [
-            permission()
-            for permission in permission_classes
-        ]
-
     def get_serializer_class(self):
         if self.action == "create":
             return CreateAssessmentSerializer
@@ -244,10 +226,7 @@ class AssessmentViewSet(
         if user.is_superuser:
             return queryset
 
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-        }:
+        if user.role != User.Role.TEACHER:
             return queryset
 
         if user.role == User.Role.TEACHER:

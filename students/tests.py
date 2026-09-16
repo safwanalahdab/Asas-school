@@ -117,7 +117,7 @@ class StudentApiEnvelopeTests(TestCase):
         self.client.force_authenticate(guardian, token={"client": "web"})
         response = self.client.get("/api/v1/students/students/")
         self.assertEqual(response.status_code, 403)
-        self.assertEqual(response.data["code"], "WEB_DASHBOARD_ACCESS_DENIED")
+        self.assertEqual(response.data["code"], "BUSINESS_PERMISSION_DENIED")
         self.assertFalse(response.data["success"])
         self.assertEqual(
             response.data["meta"]["requester_role"],

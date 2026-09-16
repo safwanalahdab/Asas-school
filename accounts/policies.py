@@ -12,12 +12,6 @@ WEB_DASHBOARD_ROLES = {
     User.Role.TECH_SUPPORT,
 }
 
-ACCOUNT_CREATORS = {
-    User.Role.SCHOOL_ADMIN,
-    User.Role.SECRETARIAT,
-    User.Role.SUPERVISOR,
-}
-
 CREATABLE_ROLES = {
     User.Role.SCHOOL_ADMIN,
     User.Role.SECRETARIAT,
@@ -31,12 +25,6 @@ ROLE_CREATION_MATRIX = {
     User.Role.SECRETARIAT: {User.Role.GUARDIAN, User.Role.SUPERVISOR},
     User.Role.SUPERVISOR: {User.Role.GUARDIAN},
 }
-
-
-def can_create_accounts(user):
-    return bool(user and user.is_authenticated and user.is_active and (
-        user.is_superuser or user.role in ACCOUNT_CREATORS
-    ))
 
 
 def can_create_role(actor, target_role):
@@ -67,28 +55,6 @@ def can_access_web_dashboard(user):
     return (
         user.is_superuser
         or user.role in WEB_DASHBOARD_ROLES
-    )
-
-def can_view_accounts(user):
-    """
-    يحدد هل يستطيع المستخدم فتح واجهة قائمة الحسابات.
-
-    الحسابات التي ستظهر له فعليًا يتم تحديدها
-    لاحقًا داخل QuerySet بناءً على دوره.
-    """
-
-    return bool(
-        user
-        and user.is_authenticated
-        and user.is_active
-        and (
-            user.is_superuser
-            or user.role in {
-                User.Role.SCHOOL_ADMIN,
-                User.Role.SECRETARIAT,
-                User.Role.SUPERVISOR,
-            }
-        )
     )
 
 def get_visible_accounts_queryset(user, queryset):

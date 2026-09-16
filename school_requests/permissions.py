@@ -1,71 +1,22 @@
-from django.contrib.auth import get_user_model
 from rest_framework.permissions import BasePermission
 
+from accounts.models import User
 
-User = get_user_model()
 
-
-class CanAccessSchoolRequests(BasePermission):
-    message = {
-        "code": "SCHOOL_REQUEST_ACCESS_DENIED",
-        "detail": "ليس لديك صلاحية للوصول إلى الطلبات.",
-    }
+class WebGuardianSchoolRequestPermission(BasePermission):
+    """Preserve the existing guardian-owned web flow; staff uses business permissions."""
 
     def has_permission(self, request, view):
         user = request.user
-        action = getattr(view, "action", None)
-
-        if user.is_superuser:
-            return action in {
-                "list",
-                "retrieve",
-                "answer",
-            }
-
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-            User.Role.SECRETARIAT,
-        }:
-            return action in {
-                "list",
-                "retrieve",
-                "answer",
-            }
-
-        if user.role == User.Role.GUARDIAN:
-            return action in {
-                "list",
-                "retrieve",
-                "create",
-            }
-
-        return False
+        return bool(
+            user
+            and user.is_authenticated
+            and user.role == User.Role.GUARDIAN
+            and getattr(view, "action", None) in {"list", "retrieve", "create"}
+        )
 
     def has_object_permission(self, request, view, obj):
-        user = request.user
-        action = getattr(view, "action", None)
-
-        if user.is_superuser:
-            return action in {
-                "retrieve",
-                "answer",
-            }
-
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-            User.Role.SECRETARIAT,
-        }:
-            return action in {
-                "retrieve",
-                "answer",
-            }
-
-        if user.role == User.Role.GUARDIAN:
-            return (
-                action == "retrieve"
-                and obj.guardian_id == user.id
-            )
-
-        return False
+        return bool(
+            getattr(view, "action", None) == "retrieve"
+            and obj.guardian_id == request.user.id
+        )

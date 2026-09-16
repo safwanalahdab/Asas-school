@@ -19,7 +19,8 @@ from django.db.models.deletion import ProtectedError
 from rest_framework.exceptions import ValidationError
 
 from accounts.models import User
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from behavior.permissions import IsWebClientToken
 
 from .filters import (
     EnrollmentFilter,
@@ -30,13 +31,6 @@ from .models import (
     Enrollment,
     GuardianStudent,
     Student,
-)
-from .permissions import (
-    CanManageStudentHealthProfile,
-    CanRegisterStudent,
-    EnrollmentPermission,
-    GuardianStudentPermission,
-    StudentPermission,
 )
 from .health_serializers import StudentHealthProfileSerializer
 from .registration_serializers import StudentRegistrationSerializer
@@ -74,9 +68,13 @@ class _AtomicCrudMixin:
 class StudentRegistrationView(ArabicApiResponseMixin, APIView):
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        CanRegisterStudent,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+    method_permissions = {
+        "post": "students.register_student",
+    }
 
     @extend_schema(
         request=StudentRegistrationSerializer,
@@ -133,9 +131,14 @@ class StudentRegistrationView(ArabicApiResponseMixin, APIView):
 class StudentHealthProfileView(ArabicApiResponseMixin, APIView):
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        CanManageStudentHealthProfile,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+    method_permissions = {
+        "get": "students.view_studenthealthprofile",
+        "patch": "students.change_studenthealthprofile",
+    }
     http_method_names = ["get", "patch", "head", "options"]
     response_messages = {
         "get": (
@@ -193,9 +196,20 @@ class StudentViewSet(
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        StudentPermission,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "students.view_student",
+        "retrieve": "students.view_student",
+        "create": "students.add_student",
+        "partial_update": "students.change_student",
+        "activate": "students.change_student",
+        "deactivate": "students.change_student",
+        "destroy": "students.delete_student",
+    }
 
     http_method_names = [
         "get",
@@ -237,11 +251,7 @@ class StudentViewSet(
 
         user = self.request.user
 
-        if user.is_superuser or user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SECRETARIAT,
-            User.Role.SUPERVISOR,
-        }:
+        if user.is_superuser or user.role != User.Role.TEACHER:
             return queryset
 
         if user.role == User.Role.TEACHER:
@@ -354,9 +364,17 @@ class GuardianStudentViewSet(
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        GuardianStudentPermission,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "students.view_guardianstudent",
+        "retrieve": "students.view_guardianstudent",
+        "create": "students.add_guardianstudent",
+        "destroy": "students.delete_guardianstudent",
+    }
 
     http_method_names = [
         "get",
@@ -446,9 +464,19 @@ class EnrollmentViewSet(
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        EnrollmentPermission,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "students.view_enrollment",
+        "retrieve": "students.view_enrollment",
+        "create": "students.add_enrollment",
+        "partial_update": "students.change_enrollment",
+        "transfer": "students.transfer_student",
+        "destroy": "students.delete_enrollment",
+    }
 
     http_method_names = [
         "get",
@@ -510,11 +538,7 @@ class EnrollmentViewSet(
 
         user = self.request.user
 
-        if user.is_superuser or user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SECRETARIAT,
-            User.Role.SUPERVISOR,
-        }:
+        if user.is_superuser or user.role != User.Role.TEACHER:
             return queryset
 
         if user.role == User.Role.TEACHER:

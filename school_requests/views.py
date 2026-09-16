@@ -15,11 +15,11 @@ from rest_framework.viewsets import GenericViewSet
 
 from .filters import SchoolRequestFilter
 
-from accounts.permissions import PasswordChangeGate
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from config.api_responses import ArabicApiResponseMixin
 
 from .models import SchoolRequest
-from .permissions import CanAccessSchoolRequests
+from .permissions import WebGuardianSchoolRequestPermission
 from .serializers import (
     AnswerSchoolRequestSerializer,
     SchoolRequestSerializer,
@@ -49,8 +49,14 @@ class SchoolRequestViewSet(
     permission_classes = [
         IsAuthenticated,
         PasswordChangeGate,
-        CanAccessSchoolRequests,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "school_requests.view_schoolrequest",
+        "retrieve": "school_requests.view_schoolrequest",
+        "answer": "school_requests.reply_to_request",
+    }
 
     filterset_class = SchoolRequestFilter
 
@@ -80,6 +86,21 @@ class SchoolRequestViewSet(
         ),
     }
 
+    def get_permissions(self):
+        user = getattr(self.request, "user", None)
+        if (
+            user
+            and user.is_authenticated
+            and user.role == User.Role.GUARDIAN
+        ):
+            permission_classes = [
+                IsAuthenticated,
+                PasswordChangeGate,
+                WebGuardianSchoolRequestPermission,
+            ]
+            return [permission() for permission in permission_classes]
+        return super().get_permissions()
+
     def get_serializer_class(self):
         if self.action == "answer":
             return AnswerSchoolRequestSerializer
@@ -90,22 +111,12 @@ class SchoolRequestViewSet(
         queryset = super().get_queryset()
         user = self.request.user
 
-        if user.is_superuser:
-            return queryset
-
-        if user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-            User.Role.SECRETARIAT,
-        }:
-            return queryset
-
         if user.role == User.Role.GUARDIAN:
             return queryset.filter(
                 guardian=user,
             )
 
-        return queryset.none()
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(

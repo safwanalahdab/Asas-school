@@ -1,20 +1,11 @@
-from django.contrib.auth import get_user_model
 from rest_framework.permissions import BasePermission
 
 
-User = get_user_model()
+class IsWebClientToken(BasePermission):
+    """Preserve the web-token gate without using role for action authorization."""
 
-
-class CanAccessBehaviorNotes(BasePermission):
-    message = "ليس لديك صلاحية للوصول إلى الملاحظات السلوكية."
+    message = "هذه الواجهة تتطلب جلسة ويب."
 
     def has_permission(self, request, view):
-        user = request.user
-
-        if user.is_superuser:
-            return True
-
-        return user.role in {
-            User.Role.SCHOOL_ADMIN,
-            User.Role.SUPERVISOR,
-        }
+        token = request.auth
+        return token is not None and token.get("client") == "web"

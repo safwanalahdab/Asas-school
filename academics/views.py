@@ -2,11 +2,13 @@ from django.db.models.deletion import ProtectedError
 from django.db import transaction
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated
 from config.api_responses import ArabicApiResponseMixin
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 
-from .permissions import AcademicManagementPermission
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from behavior.permissions import IsWebClientToken
 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter, SearchFilter
@@ -38,6 +40,23 @@ ACADEMIC_HTTP_METHODS = (
     "options",
 )
 
+ACADEMIC_PERMISSION_CLASSES = [
+    IsAuthenticated,
+    PasswordChangeGate,
+    IsWebClientToken,
+    ActionBusinessPermission,
+]
+
+
+def academic_action_permissions(model_name):
+    return {
+        "list": f"academics.view_{model_name}",
+        "retrieve": f"academics.view_{model_name}",
+        "create": f"academics.add_{model_name}",
+        "partial_update": f"academics.change_{model_name}",
+        "destroy": f"academics.delete_{model_name}",
+    }
+
 
 class _AtomicCrudMixin:
     @transaction.atomic
@@ -63,9 +82,8 @@ class AcademicYearViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.Mod
     }
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
-    permission_classes = [
-        AcademicManagementPermission,
-    ]
+    permission_classes = ACADEMIC_PERMISSION_CLASSES
+    action_permissions = academic_action_permissions("academicyear")
     http_method_names = ACADEMIC_HTTP_METHODS
 
     filter_backends = [
@@ -137,9 +155,8 @@ class TermViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSe
     ).all()
 
     serializer_class = TermSerializer
-    permission_classes = [
-        AcademicManagementPermission,
-    ]
+    permission_classes = ACADEMIC_PERMISSION_CLASSES
+    action_permissions = academic_action_permissions("term")
     http_method_names = ACADEMIC_HTTP_METHODS
 
     filter_backends = [
@@ -196,9 +213,8 @@ class GradeLevelViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.Model
     queryset = GradeLevel.objects.all()
 
     serializer_class = GradeLevelSerializer
-    permission_classes = [
-        AcademicManagementPermission,
-    ]
+    permission_classes = ACADEMIC_PERMISSION_CLASSES
+    action_permissions = academic_action_permissions("gradelevel")
     http_method_names = ACADEMIC_HTTP_METHODS
 
     filter_backends = [
@@ -255,9 +271,8 @@ class SectionViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelVie
     ).all()
 
     serializer_class = SectionSerializer
-    permission_classes = [
-        AcademicManagementPermission,
-    ]
+    permission_classes = ACADEMIC_PERMISSION_CLASSES
+    action_permissions = academic_action_permissions("section")
     http_method_names = ACADEMIC_HTTP_METHODS
 
     filter_backends = [
@@ -312,9 +327,8 @@ class SubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelVie
     }
     queryset = Subject.objects.all()
     serializer_class = SubjectSerializer
-    permission_classes = [
-        AcademicManagementPermission,
-    ]
+    permission_classes = ACADEMIC_PERMISSION_CLASSES
+    action_permissions = academic_action_permissions("subject")
     http_method_names = ACADEMIC_HTTP_METHODS
 
     filter_backends = [
@@ -375,9 +389,8 @@ class GradeSubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.Mod
     ).all()
 
     serializer_class = GradeSubjectSerializer
-    permission_classes = [
-        AcademicManagementPermission,
-    ]
+    permission_classes = ACADEMIC_PERMISSION_CLASSES
+    action_permissions = academic_action_permissions("gradesubject")
     http_method_names = ACADEMIC_HTTP_METHODS
 
     filter_backends = [

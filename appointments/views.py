@@ -11,12 +11,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
-from accounts.permissions import PasswordChangeGate
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from config.api_responses import ArabicApiResponseMixin
 
 from .filters import AppointmentRequestFilter
 from .models import AppointmentRequest
-from .permissions import CanAccessAppointments
 from .serializers import (
     AppointmentApprovalSerializer,
     AppointmentDecisionSerializer,
@@ -49,8 +48,15 @@ class AppointmentRequestViewSet(
     permission_classes = [
         IsAuthenticated,
         PasswordChangeGate,
-        CanAccessAppointments,
+        ActionBusinessPermission,
     ]
+
+    action_permissions = {
+        "list": "appointments.view_appointmentrequest",
+        "retrieve": "appointments.view_appointmentrequest",
+        "approve": "appointments.decide_appointment_request",
+        "reject": "appointments.decide_appointment_request",
+    }
 
     filterset_class = AppointmentRequestFilter
 
@@ -106,13 +112,10 @@ class AppointmentRequestViewSet(
         queryset = super().get_queryset()
         user = self.request.user
 
-        if user.is_superuser:
-            return queryset
+        if user.role == User.Role.GUARDIAN:
+            return queryset.filter(guardian=user)
 
-        if user.role in {User.Role.SCHOOL_ADMIN, User.Role.SECRETARIAT}:
-            return queryset
-
-        return queryset.none()
+        return queryset
 
     def perform_create(
         self,

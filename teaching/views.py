@@ -9,14 +9,14 @@ from audit_logs.services import get_actor_display, record_audit_event
 from django.db import transaction
 
 from accounts.models import User
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from behavior.permissions import IsWebClientToken
 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter, SearchFilter
 from .filters import TeacherAssignmentFilter
 
 from .models import TeacherAssignment
-from .permissions import TeachingAssignmentPermission
 from .serializers import TeacherAssignmentSerializer
 
 
@@ -37,9 +37,19 @@ class TeacherAssignmentViewSet(ArabicApiResponseMixin, viewsets.ModelViewSet):
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        TeachingAssignmentPermission,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
+    action_permissions = {
+        "list": "teaching.view_teacherassignment",
+        "retrieve": "teaching.view_teacherassignment",
+        "create": "teaching.add_teacherassignment",
+        "partial_update": "teaching.change_teacherassignment",
+        "end": "teaching.change_teacherassignment",
+        "reopen": "teaching.change_teacherassignment",
+        "destroy": "teaching.delete_teacherassignment",
+    }
     filter_backends = [
         DjangoFilterBackend,
         SearchFilter,

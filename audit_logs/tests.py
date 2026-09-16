@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.db import connection, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TestCase, TransactionTestCase
@@ -106,6 +107,12 @@ class AuditApiTests(TestCase):
     def authenticate(self, user):
         self.client.force_authenticate(user, token={"client": "web"})
 
+    def permission(self):
+        return Permission.objects.get(
+            content_type__app_label="audit_logs",
+            codename="view_auditlog",
+        )
+
     def test_admin_list_retrieve_search_filters_and_ordering(self):
         self.authenticate(self.admin)
         older = record_audit_event(
@@ -124,16 +131,44 @@ class AuditApiTests(TestCase):
         today = timezone.localdate().isoformat()
         self.assertEqual(len(self.client.get(f"/api/v1/audit-logs/?date_from={today}&date_to={today}").data["data"]["results"]), 1)
 
-    def test_only_admin_and_superuser_can_read(self):
+    def test_list_and_retrieve_require_direct_view_permission(self):
+        self.admin.user_permissions.remove(self.permission())
         self.authenticate(self.admin)
+        self.assertEqual(self.client.get("/api/v1/audit-logs/").status_code, 403)
+        self.assertEqual(
+            self.client.get(f"/api/v1/audit-logs/{self.event.id}/").status_code,
+            403,
+        )
+        self.admin.user_permissions.add(self.permission())
         self.assertEqual(self.client.get("/api/v1/audit-logs/").status_code, 200)
+        self.assertEqual(
+            self.client.get(f"/api/v1/audit-logs/{self.event.id}/").status_code,
+            200,
+        )
+
+    def test_nontraditional_web_role_with_permission_can_read(self):
+        support = User.objects.create_user(
+            username="audit-support", password="Strong!934",
+            role=User.Role.TECH_SUPPORT, must_change_password=False,
+        )
+        support.user_permissions.add(self.permission())
+        self.authenticate(support)
+        self.assertEqual(self.client.get("/api/v1/audit-logs/").status_code, 200)
+
+    def test_superuser_bypasses_direct_permission(self):
         root = User.objects.create_superuser(username="audit-root", password="Strong!934")
+        root.user_permissions.clear()
         self.authenticate(root)
         self.assertEqual(self.client.get("/api/v1/audit-logs/").status_code, 200)
-        for role in (User.Role.SECRETARIAT, User.Role.SUPERVISOR, User.Role.TEACHER, User.Role.GUARDIAN, User.Role.TECH_SUPPORT):
-            user = User.objects.create_user(username=f"audit-{role}", password="Strong!934", role=role, must_change_password=False)
-            self.authenticate(user)
-            self.assertEqual(self.client.get("/api/v1/audit-logs/").status_code, 403)
+
+    def test_mobile_token_is_rejected_even_with_permission(self):
+        support = User.objects.create_user(
+            username="mobile-audit-support", password="Strong!934",
+            role=User.Role.TECH_SUPPORT, must_change_password=False,
+        )
+        support.user_permissions.add(self.permission())
+        self.client.force_authenticate(user=support, token={"client": "mobile"})
+        self.assertEqual(self.client.get("/api/v1/audit-logs/").status_code, 403)
 
     def test_api_is_read_only(self):
         self.authenticate(self.admin)

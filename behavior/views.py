@@ -3,10 +3,10 @@ from django.db import transaction
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 
-from accounts.permissions import IsWebDashboardUser
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 
 from .models import BehaviorNote
-from .permissions import CanAccessBehaviorNotes
+from .permissions import IsWebClientToken
 from .serializers import BehaviorNoteSerializer
 from .services import notify_behavior_note_created
 from config.api_responses import ArabicApiResponseMixin
@@ -22,11 +22,19 @@ class BehaviorNoteViewSet(
     )
 
     serializer_class = BehaviorNoteSerializer
+    action_permissions = {
+        "list": "behavior.view_behaviornote",
+        "retrieve": "behavior.view_behaviornote",
+        "create": "behavior.add_behaviornote",
+        "partial_update": "behavior.change_behaviornote",
+        "destroy": "behavior.delete_behaviornote",
+    }
 
     permission_classes = [
         IsAuthenticated,
-        IsWebDashboardUser,
-        CanAccessBehaviorNotes,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
     ]
 
     http_method_names = [
