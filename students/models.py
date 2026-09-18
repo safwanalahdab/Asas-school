@@ -75,6 +75,7 @@ class Student(models.Model):
         permissions = [
             ("register_student", "تسجيل طالب"),
             ("transfer_student", "نقل طالب بين الشعب"),
+            ("view_student_profile", "عرض الملف الشامل للطالب"),
         ]
 
         ordering = [

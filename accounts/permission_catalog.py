@@ -102,6 +102,7 @@ PERMISSION_CATALOG = tuple(
         ("students.view_enrollment", "عرض التسجيلات الدراسية"),
         ("students.view_guardianstudent", "عرض ارتباطات أولياء الأمور"),
         ("students.view_student", "عرض الطلاب"),
+        ("students.view_student_profile", "عرض الملف الشامل للطالب"),
         ("students.view_studenthealthprofile", "عرض الملف الصحي للطالب"),
         ("teaching.add_teacherassignment", "إضافة إسناد تعليمي"),
         ("teaching.change_teacherassignment", "تعديل إسناد تعليمي"),

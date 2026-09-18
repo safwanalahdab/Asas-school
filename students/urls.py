@@ -8,6 +8,7 @@ from .views import (
     StudentRegistrationView,
     StudentViewSet,
 )
+from .profile_views import StudentProfileView
 
 
 router = DefaultRouter()
@@ -33,6 +34,11 @@ router.register(
 
 urlpatterns = [
     path("register/", StudentRegistrationView.as_view(), name="student-register"),
+    path(
+        "<uuid:student_id>/profile/",
+        StudentProfileView.as_view(),
+        name="student-profile",
+    ),
     path(
         "<uuid:student_id>/health-profile/",
         StudentHealthProfileView.as_view(),
