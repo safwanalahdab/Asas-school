@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import datetime, time, timedelta
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -43,6 +44,7 @@ class MobileAppointmentRequestTests(TestCase):
         return AppointmentRequest.objects.create(
             guardian=guardian or self.guardian,
             requested_date=kwargs.pop("requested_date", timezone.localdate()),
+            requested_time=kwargs.pop("requested_time", time(10, 30)),
             request_reason=kwargs.pop("request_reason", "Appointment reason"),
             **kwargs,
         )
@@ -69,18 +71,22 @@ class MobileAppointmentRequestTests(TestCase):
 
     def test_guardian_creates_pending_appointment_for_today(self):
         self.authenticate()
-        response = self.client.post(
-            self.list_url,
-            {
-                "requested_date": str(timezone.localdate()),
-                "request_reason": "  Review academic progress  ",
-            },
-            format="json",
-        )
+        now = timezone.make_aware(datetime(2026, 9, 20, 9, 0))
+        with patch("appointments.mobile_serializers.timezone.now", return_value=now):
+            response = self.client.post(
+                self.list_url,
+                {
+                    "requested_date": "2026-09-20",
+                    "requested_time": "10:30",
+                    "request_reason": "  Review academic progress  ",
+                },
+                format="json",
+            )
         self.assertEqual(response.status_code, 201)
         appointment = AppointmentRequest.objects.get(id=response.data["data"]["id"])
         self.assertEqual(appointment.guardian, self.guardian)
         self.assertEqual(appointment.status, AppointmentRequest.Status.PENDING)
+        self.assertEqual(appointment.requested_time, time(10, 30))
         self.assertEqual(appointment.request_reason, "Review academic progress")
 
     def test_server_controlled_fields_cannot_be_injected(self):
@@ -88,11 +94,13 @@ class MobileAppointmentRequestTests(TestCase):
         response = self.client.post(
             self.list_url,
             {
-                "requested_date": str(timezone.localdate()),
+                "requested_date": str(timezone.localdate() + timedelta(days=1)),
+                "requested_time": "10:30",
                 "request_reason": "Malicious body",
                 "guardian": str(self.other_guardian.id),
                 "status": AppointmentRequest.Status.APPROVED,
                 "decision_reason": "fake",
+                "approval_note": "fake approval",
                 "rejection_reason": "fake alias",
                 "decided_by": str(self.admin.id),
                 "decided_at": timezone.now().isoformat(),
@@ -104,38 +112,48 @@ class MobileAppointmentRequestTests(TestCase):
         self.assertEqual(appointment.guardian, self.guardian)
         self.assertEqual(appointment.status, AppointmentRequest.Status.PENDING)
         self.assertEqual(appointment.decision_reason, "")
+        self.assertEqual(appointment.approval_note, "")
         self.assertIsNone(appointment.decided_by)
         self.assertIsNone(appointment.decided_at)
 
     def test_required_and_reason_validation(self):
         self.authenticate()
-        valid_date = str(timezone.localdate())
+        valid_date = str(timezone.localdate() + timedelta(days=1))
         cases = (
-            ({"request_reason": "Reason"}, "requested_date"),
-            ({"requested_date": valid_date}, "request_reason"),
-            ({"requested_date": valid_date, "request_reason": ""}, "request_reason"),
-            ({"requested_date": valid_date, "request_reason": "   "}, "request_reason"),
+            ({"requested_time": "10:30", "request_reason": "Reason"}, "requested_date"),
+            ({"requested_date": valid_date, "request_reason": "Reason"}, "requested_time"),
+            ({"requested_date": valid_date, "requested_time": "bad", "request_reason": "Reason"}, "requested_time"),
+            ({"requested_date": valid_date, "requested_time": "10:30"}, "request_reason"),
+            ({"requested_date": valid_date, "requested_time": "10:30", "request_reason": ""}, "request_reason"),
+            ({"requested_date": valid_date, "requested_time": "10:30", "request_reason": "   "}, "request_reason"),
         )
         for body, field in cases:
             response = self.client.post(self.list_url, body, format="json")
             self.assertEqual(response.status_code, 400)
             self.assertIn(field, response.data["errors"])
 
-    def test_past_date_is_rejected_and_today_is_accepted(self):
+    def test_requested_datetime_validation(self):
         self.authenticate()
-        past = timezone.localdate() - timedelta(days=1)
-        rejected = self.client.post(
-            self.list_url,
-            {"requested_date": str(past), "request_reason": "Past"},
-            format="json",
-        )
-        accepted = self.client.post(
-            self.list_url,
-            {"requested_date": str(timezone.localdate()), "request_reason": "Today"},
-            format="json",
-        )
-        self.assertEqual(rejected.status_code, 400)
-        self.assertEqual(accepted.status_code, 201)
+        now = timezone.make_aware(datetime(2026, 9, 20, 12, 0))
+        with patch("appointments.mobile_serializers.timezone.now", return_value=now):
+            cases = (
+                ("2026-09-19", "13:00", 400),
+                ("2026-09-20", "11:59", 400),
+                ("2026-09-20", "12:01", 201),
+                ("2026-09-21", "10:30:00", 201),
+            )
+            for requested_date, requested_time, expected in cases:
+                with self.subTest(date=requested_date, time=requested_time):
+                    response = self.client.post(
+                        self.list_url,
+                        {
+                            "requested_date": requested_date,
+                            "requested_time": requested_time,
+                            "request_reason": "Time validation",
+                        },
+                        format="json",
+                    )
+                    self.assertEqual(response.status_code, expected, response.data)
 
     def test_list_and_retrieve_are_guardian_scoped_and_paginated(self):
         own = self.create_appointment()
@@ -303,15 +321,24 @@ class MobileAppointmentRequestTests(TestCase):
 
     def test_web_approval_is_visible_in_mobile(self):
         appointment = self.create_appointment()
-        self.make_web_decision(appointment, "approve", {})
+        self.make_web_decision(
+            appointment,
+            "approve",
+            {"approval_note": "  Bring documents  "},
+        )
         self.assertEqual(appointment.status, AppointmentRequest.Status.APPROVED)
         self.assertEqual(appointment.decision_reason, "")
+        self.assertEqual(appointment.approval_note, "Bring documents")
         self.authenticate()
         data = self.client.get(self.detail_url(appointment)).data["data"]
         self.assertEqual(data["status"], "approved")
+        self.assertEqual(data["requested_time"], "10:30:00")
+        self.assertEqual(data["approval_note"], "Bring documents")
         self.assertEqual(data["rejection_reason"], "")
         self.assertIsNotNone(data["decided_at"])
         self.assertNotIn("decided_by", self.recursive_keys(data))
+        listed = self.items(self.client.get(self.list_url))[0]
+        self.assertEqual(listed["approval_note"], "Bring documents")
 
     def test_web_rejection_is_visible_in_mobile(self):
         appointment = self.create_appointment()
@@ -323,9 +350,17 @@ class MobileAppointmentRequestTests(TestCase):
         self.authenticate()
         data = self.client.get(self.detail_url(appointment)).data["data"]
         self.assertEqual(data["status"], "rejected")
+        self.assertEqual(data["approval_note"], "")
         self.assertEqual(data["rejection_reason"], "Administration unavailable")
         self.assertIsNotNone(data["decided_at"])
         self.assertNotIn("decided_by", self.recursive_keys(data))
+
+    def test_legacy_null_requested_time_is_serialized(self):
+        appointment = self.create_appointment(requested_time=None)
+        self.authenticate()
+        response = self.client.get(self.detail_url(appointment))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["data"]["requested_time"])
 
     def test_mobile_is_read_only_after_create_and_has_no_decision_actions(self):
         appointment = self.create_appointment()

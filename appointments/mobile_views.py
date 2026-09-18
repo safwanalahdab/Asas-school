@@ -59,6 +59,7 @@ class MobileAppointmentRequestViewSet(
             guardian=self.request.user,
             status=AppointmentRequest.Status.PENDING,
             decision_reason="",
+            approval_note="",
             decided_by=None,
             decided_at=None,
         )

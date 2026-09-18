@@ -37,7 +37,9 @@ def approve_appointment_request(
     *,
     appointment,
     actor,
+    approval_note="",
 ):
+    approval_note = approval_note.strip()
     locked_appointment = (
         AppointmentRequest.objects
         .select_for_update()
@@ -64,6 +66,7 @@ def approve_appointment_request(
         AppointmentRequest.Status.APPROVED
     )
     locked_appointment.decision_reason = ""
+    locked_appointment.approval_note = approval_note
     locked_appointment.decided_by = actor
     locked_appointment.decided_at = decision_time
 
@@ -71,17 +74,22 @@ def approve_appointment_request(
         update_fields=[
             "status",
             "decision_reason",
+            "approval_note",
             "decided_by",
             "decided_at",
             "updated_at",
         ]
     )
 
+    notification_body = APPOINTMENT_APPROVED_BODY
+    if approval_note:
+        notification_body = f"{notification_body} ملاحظة الإدارة: {approval_note}"
+
     create_notification(
         recipient=locked_appointment.guardian,
         notification_type=Notification.NotificationType.APPOINTMENT,
         title=APPOINTMENT_NOTIFICATION_TITLE,
-        body=APPOINTMENT_APPROVED_BODY,
+        body=notification_body,
         student=None,
         resource_type="appointment",
         resource_id=locked_appointment.id,
@@ -130,6 +138,7 @@ def reject_appointment_request(
     locked_appointment.decision_reason = (
         decision_reason
     )
+    locked_appointment.approval_note = ""
     locked_appointment.decided_by = actor
     locked_appointment.decided_at = decision_time
 
@@ -137,6 +146,7 @@ def reject_appointment_request(
         update_fields=[
             "status",
             "decision_reason",
+            "approval_note",
             "decided_by",
             "decided_at",
             "updated_at",

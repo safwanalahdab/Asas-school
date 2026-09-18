@@ -27,6 +27,11 @@ class AppointmentRequest(models.Model):
 
     requested_date = models.DateField()
 
+    requested_time = models.TimeField(
+        null=True,
+        blank=True,
+    )
+
     request_reason = models.TextField()
 
     status = models.CharField(
@@ -36,6 +41,11 @@ class AppointmentRequest(models.Model):
     )
 
     decision_reason = models.TextField(
+        blank=True,
+        default="",
+    )
+
+    approval_note = models.TextField(
         blank=True,
         default="",
     )
@@ -77,8 +87,9 @@ class AppointmentRequest(models.Model):
                 fields=[
                     "status",
                     "requested_date",
+                    "requested_time",
                 ],
-                name="appt_status_date_idx",
+                name="appt_status_datetime_idx",
             ),
             models.Index(
                 fields=[
@@ -95,6 +106,7 @@ class AppointmentRequest(models.Model):
                     models.Q(
                         status="pending",
                         decision_reason="",
+                        approval_note="",
                         decided_by__isnull=True,
                         decided_at__isnull=True,
                     )
@@ -109,6 +121,7 @@ class AppointmentRequest(models.Model):
                     | (
                         models.Q(
                             status="rejected",
+                            approval_note="",
                             decided_by__isnull=False,
                             decided_at__isnull=False,
                         )

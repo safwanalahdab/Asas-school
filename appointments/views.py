@@ -62,6 +62,7 @@ class AppointmentRequestViewSet(
 
     ordering_fields = [
         "requested_date",
+        "requested_time",
         "created_at",
     ]
 
@@ -153,6 +154,10 @@ class AppointmentRequestViewSet(
         appointment = approve_appointment_request(
             appointment=appointment,
             actor=request.user,
+            approval_note=serializer.validated_data.get(
+                "approval_note",
+                "",
+            ),
         )
 
         response_serializer = AppointmentRequestSerializer(

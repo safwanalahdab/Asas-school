@@ -85,6 +85,19 @@ class AppointmentNotificationIntegrationTests(TestCase):
         self.assertEqual(notification.title, APPOINTMENT_NOTIFICATION_TITLE)
         self.assertEqual(notification.body, APPOINTMENT_APPROVED_BODY)
 
+    def test_approval_note_is_appended_only_when_present(self):
+        appointment = self.appointment()
+        approve_appointment_request(
+            appointment=appointment,
+            actor=self.admin,
+            approval_note="  يرجى مراجعة مكتب المدير.  ",
+        )
+        notification = Notification.objects.get()
+        self.assertEqual(
+            notification.body,
+            f"{APPOINTMENT_APPROVED_BODY} ملاحظة الإدارة: يرجى مراجعة مكتب المدير.",
+        )
+
     def test_reject_creates_private_mobile_safe_notification(self):
         appointment = self.appointment()
         private_reason = "Sensitive internal rejection details"

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -19,9 +21,11 @@ class MobileAppointmentRequestSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "requested_date",
+            "requested_time",
             "request_reason",
             "status",
             "status_display",
+            "approval_note",
             "rejection_reason",
             "created_at",
             "decided_at",
@@ -30,10 +34,44 @@ class MobileAppointmentRequestSerializer(serializers.ModelSerializer):
             "id",
             "status",
             "status_display",
+            "approval_note",
             "rejection_reason",
             "created_at",
             "decided_at",
         )
+
+        extra_kwargs = {
+            "requested_time": {
+                "required": True,
+                "allow_null": False,
+            },
+        }
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        requested_date = attrs.get("requested_date")
+        requested_time = attrs.get("requested_time")
+
+        if requested_date is None or requested_time is None:
+            return attrs
+
+        requested_at = datetime.combine(requested_date, requested_time)
+        if timezone.is_naive(requested_at):
+            requested_at = timezone.make_aware(
+                requested_at,
+                timezone.get_current_timezone(),
+            )
+
+        if requested_at <= timezone.now():
+            raise serializers.ValidationError(
+                {
+                    "requested_time": (
+                        "لا يمكن طلب موعد في وقت سابق للوقت الحالي."
+                    )
+                }
+            )
+
+        return attrs
 
     def validate_requested_date(self, value):
         if value < timezone.localdate():

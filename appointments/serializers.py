@@ -38,12 +38,14 @@ class AppointmentRequestSerializer(
             "guardian_display",
 
             "requested_date",
+            "requested_time",
             "request_reason",
 
             "status",
             "status_display",
 
             "decision_reason",
+            "approval_note",
 
             "decided_by",
             "decided_by_username",
@@ -64,6 +66,7 @@ class AppointmentRequestSerializer(
             "status_display",
 
             "decision_reason",
+            "approval_note",
 
             "decided_by",
             "decided_by_username",
@@ -134,4 +137,9 @@ class AppointmentDecisionSerializer(
 
 
 class AppointmentApprovalSerializer(serializers.Serializer):
-    pass
+    approval_note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        default="",
+    )

@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from datetime import time
+
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -33,6 +35,7 @@ class AppointmentWebTests(TestCase):
     def appointment(self):
         return AppointmentRequest.objects.create(
             guardian=self.guardian, requested_date=timezone.localdate(),
+            requested_time=time(10, 30),
             request_reason="Appointment reason",
         )
 
@@ -56,8 +59,33 @@ class AppointmentWebTests(TestCase):
         obj.refresh_from_db()
         self.assertEqual(obj.status, AppointmentRequest.Status.APPROVED)
         self.assertEqual(obj.decision_reason, "")
+        self.assertEqual(obj.approval_note, "")
         self.assertEqual(obj.decided_by, self.admin)
         self.assertIsNotNone(obj.decided_at)
+
+    def test_admin_approve_with_trimmed_optional_note(self):
+        obj = self.appointment()
+        response = self.api_client(self.admin).post(
+            self.action(obj, "approve"),
+            {"approval_note": "  يرجى الحضور مبكرًا.  "},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        obj.refresh_from_db()
+        self.assertEqual(obj.approval_note, "يرجى الحضور مبكرًا.")
+        self.assertEqual(response.data["data"]["requested_time"], "10:30:00")
+        self.assertEqual(response.data["data"]["approval_note"], "يرجى الحضور مبكرًا.")
+
+    def test_whitespace_approval_note_is_stored_empty(self):
+        obj = self.appointment()
+        response = self.api_client(self.admin).post(
+            self.action(obj, "approve"),
+            {"approval_note": "   "},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        obj.refresh_from_db()
+        self.assertEqual(obj.approval_note, "")
 
     def test_admin_reject_validation_and_result(self):
         client = self.api_client(self.admin)
@@ -75,6 +103,7 @@ class AppointmentWebTests(TestCase):
         obj.refresh_from_db()
         self.assertEqual(obj.status, AppointmentRequest.Status.REJECTED)
         self.assertEqual(obj.decision_reason, "Administration unavailable")
+        self.assertEqual(obj.approval_note, "")
         self.assertEqual(obj.decided_by, self.admin)
         self.assertIsNotNone(obj.decided_at)
 
@@ -137,7 +166,7 @@ class AppointmentConstraintTests(TestCase):
     def test_valid_constraint_states(self):
         now = timezone.now()
         self.create()
-        self.create(status="approved", decision_reason="", decided_by=self.admin, decided_at=now)
+        self.create(status="approved", decision_reason="", approval_note="Note", decided_by=self.admin, decided_at=now)
         self.create(status="rejected", decision_reason="Reason", decided_by=self.admin, decided_at=now)
         self.assertEqual(AppointmentRequest.objects.count(), 3)
 
@@ -145,9 +174,11 @@ class AppointmentConstraintTests(TestCase):
         now = timezone.now()
         invalid = (
             {"status": "pending", "decision_reason": "Unexpected"},
+            {"status": "pending", "approval_note": "Unexpected"},
             {"status": "approved", "decision_reason": "Fake", "decided_by": self.admin, "decided_at": now},
             {"status": "approved", "decision_reason": ""},
             {"status": "rejected", "decision_reason": "", "decided_by": self.admin, "decided_at": now},
+            {"status": "rejected", "decision_reason": "Reason", "approval_note": "Unexpected", "decided_by": self.admin, "decided_at": now},
             {"status": "rejected", "decision_reason": "Reason"},
         )
         for state in invalid:
