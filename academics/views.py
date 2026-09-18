@@ -1,5 +1,6 @@
 from django.db.models.deletion import ProtectedError
 from django.db import transaction
+from django.db.models import Count, Q
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -210,7 +211,19 @@ class GradeLevelViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.Model
         "partial_update": ("GRADE_LEVEL_UPDATED", "تم تحديث الصف الدراسي بنجاح."),
         "destroy": ("GRADE_LEVEL_DELETED", "تم حذف الصف الدراسي بنجاح."),
     }
-    queryset = GradeLevel.objects.all()
+    queryset = GradeLevel.objects.annotate(
+        students_count=Count(
+            "sections__student_enrollments__student",
+            filter=Q(
+                sections__academic_year__status=AcademicYear.Status.ACTIVE,
+                sections__student_enrollments__academic_year__status=(
+                    AcademicYear.Status.ACTIVE
+                ),
+                sections__student_enrollments__student__is_active=True,
+            ),
+            distinct=True,
+        )
+    )
 
     serializer_class = GradeLevelSerializer
     permission_classes = ACADEMIC_PERMISSION_CLASSES
@@ -268,7 +281,17 @@ class SectionViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelVie
     queryset = Section.objects.select_related(
         "academic_year",
         "grade_level",
-    ).all()
+    ).annotate(
+        students_count=Count(
+            "student_enrollments__student",
+            filter=Q(
+                academic_year__status=AcademicYear.Status.ACTIVE,
+                student_enrollments__academic_year__status=AcademicYear.Status.ACTIVE,
+                student_enrollments__student__is_active=True,
+            ),
+            distinct=True,
+        )
+    )
 
     serializer_class = SectionSerializer
     permission_classes = ACADEMIC_PERMISSION_CLASSES

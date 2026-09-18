@@ -173,6 +173,9 @@ class GradeLevelSerializer(serializers.ModelSerializer):
         source="get_stage_display",
         read_only=True,
     )
+    students_count = serializers.IntegerField(
+        read_only=True,
+    )
 
     class Meta:
         model = GradeLevel
@@ -182,6 +185,7 @@ class GradeLevelSerializer(serializers.ModelSerializer):
             "stage",
             "stage_display",
             "name",
+            "students_count",
             "is_active",
             "created_at",
             "updated_at",
@@ -204,6 +208,9 @@ class SectionSerializer(serializers.ModelSerializer):
         source="grade_level.name",
         read_only=True,
     )
+    students_count = serializers.IntegerField(
+        read_only=True,
+    )
 
     class Meta:
         model = Section
@@ -215,6 +222,7 @@ class SectionSerializer(serializers.ModelSerializer):
             "grade_level",
             "grade_level_display",
             "name",
+            "students_count",
             "is_active",
             "created_at",
             "updated_at",
