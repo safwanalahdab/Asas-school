@@ -24,6 +24,7 @@ class SchoolRequestSerializer(serializers.ModelSerializer):
         source="guardian.username",
         read_only=True,
     )
+    guardian_full_name = serializers.SerializerMethodField()
 
     student_display = serializers.SerializerMethodField()
 
@@ -45,6 +46,7 @@ class SchoolRequestSerializer(serializers.ModelSerializer):
 
             "guardian",
             "guardian_username",
+            "guardian_full_name",
 
             "student",
             "student_display",
@@ -85,6 +87,10 @@ class SchoolRequestSerializer(serializers.ModelSerializer):
             "id": str(obj.student.id),
             "name": obj.student.full_name,
         }
+
+    def get_guardian_full_name(self, obj):
+        full_name = obj.guardian.get_full_name().strip()
+        return full_name or obj.guardian.username
 
     def validate_student(self, student):
         request = self.context.get("request")
