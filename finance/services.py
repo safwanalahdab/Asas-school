@@ -641,8 +641,11 @@ def record_payment(
     currency,
     amount,
     exchange_rate_syp_per_usd=None,
+    note="",
     actor,
 ):
+    note = note.strip()
+
     if amount <= 0:
         raise ValidationError(
             {
@@ -735,6 +738,7 @@ def record_payment(
             exchange_rate_syp_per_usd
         ),
         equivalent_usd=equivalent_usd,
+        note=note,
         recorded_by=actor,
     )
     student_name = locked_account.enrollment.student.full_name

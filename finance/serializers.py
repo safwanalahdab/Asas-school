@@ -257,6 +257,7 @@ class PaymentSerializer(
             "amount",
             "exchange_rate_syp_per_usd",
             "equivalent_usd",
+            "note",
             "paid_at",
             "recorded_by",
             "recorded_by_username",
@@ -457,6 +458,13 @@ class RecordPaymentSerializer(
             allow_null=True,
             min_value=Decimal("0.0001"),
         )
+    )
+
+    note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        default="",
     )
 
 

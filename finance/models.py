@@ -322,6 +322,11 @@ class Payment(models.Model):
         decimal_places=2,
     )
 
+    note = models.TextField(
+        blank=True,
+        default="",
+    )
+
     paid_at = models.DateTimeField(
         default=timezone.now,
     )

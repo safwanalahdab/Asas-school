@@ -475,6 +475,10 @@ class StudentFinancialAccountViewSet(
                     "exchange_rate_syp_per_usd",
                 )
             ),
+            note=serializer.validated_data.get(
+                "note",
+                "",
+            ),
             actor=request.user,
         )
 

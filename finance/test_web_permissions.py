@@ -157,6 +157,94 @@ class WebFinancePermissionTests(TestCase):
         self.grant(self.teacher, "finance.cancel_discount")
         self.assertEqual(self.client.post(cancel_discount_url, {"cancellation_reason": "Correction"}).status_code, 200)
 
+    def test_payment_note_is_trimmed_and_exposed_in_responses(self):
+        detail_url = f"/api/v1/finance/accounts/{self.other.pk}/"
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.add_payment")
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+
+        response = self.client.post(
+            detail_url + "payments/",
+            {
+                "currency": "usd",
+                "amount": "100.00",
+                "note": "  دفعة شهر أيلول  ",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["note"], "دفعة شهر أيلول")
+
+        payment = Payment.objects.get(account=self.other)
+        self.assertEqual(payment.note, "دفعة شهر أيلول")
+        self.assertEqual(payment.equivalent_usd, Decimal("100.00"))
+
+        detail = self.client.get(detail_url)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["data"]["payments"][0]["note"], "دفعة شهر أيلول")
+
+    def test_payment_note_defaults_and_whitespace_are_empty(self):
+        detail_url = f"/api/v1/finance/accounts/{self.other.pk}/"
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.add_payment")
+
+        without_note = self.client.post(
+            detail_url + "payments/",
+            {"currency": "usd", "amount": "10.00"},
+            format="json",
+        )
+        whitespace_note = self.client.post(
+            detail_url + "payments/",
+            {"currency": "usd", "amount": "20.00", "note": "   "},
+            format="json",
+        )
+        self.assertEqual(without_note.status_code, 201)
+        self.assertEqual(whitespace_note.status_code, 201)
+        self.assertEqual(without_note.data["data"]["note"], "")
+        self.assertEqual(whitespace_note.data["data"]["note"], "")
+        self.assertEqual(
+            set(Payment.objects.filter(account=self.other).values_list("note", flat=True)),
+            {""},
+        )
+
+    def test_syp_payment_calculation_is_unchanged_by_note(self):
+        detail_url = f"/api/v1/finance/accounts/{self.other.pk}/"
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.add_payment")
+        response = self.client.post(
+            detail_url + "payments/",
+            {
+                "currency": "syp",
+                "amount": "500000.00",
+                "exchange_rate_syp_per_usd": "10000.0000",
+                "note": "  تم استلام الدفعة نقداً  ",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["data"]["equivalent_usd"], "50.00")
+        self.assertEqual(response.data["data"]["note"], "تم استلام الدفعة نقداً")
+
+    def test_payment_note_does_not_change_cancellation_or_http_contract(self):
+        detail_url = f"/api/v1/finance/accounts/{self.other.pk}/"
+        payment_url = detail_url + "payments/"
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.add_payment")
+        self.grant(self.teacher, "finance.cancel_payment")
+        created = self.client.post(
+            payment_url,
+            {"currency": "usd", "amount": "25.00", "note": "Receipt note"},
+            format="json",
+        )
+        payment = Payment.objects.get(pk=created.data["data"]["id"])
+        cancelled = self.client.post(
+            f"{payment_url}{payment.pk}/cancel/",
+            {"cancellation_reason": "Correction"},
+            format="json",
+        )
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(cancelled.data["data"]["note"], "Receipt note")
+
     def test_guardian_scope_applies_to_reads_and_custom_actions(self):
         list_url = "/api/v1/finance/accounts/"
         own_url = f"{list_url}{self.owned.pk}/"
