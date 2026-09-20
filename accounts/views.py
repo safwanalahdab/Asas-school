@@ -465,7 +465,9 @@ class UserViewSet(
         المستخدم الذي أرسل الطلب.
         """
 
-        queryset = User.objects.all()
+        queryset = User.objects.select_related("supervisor_scope").prefetch_related(
+            "supervisor_scope__stages"
+        )
 
         return get_visible_accounts_queryset(
             self.request.user,
@@ -516,15 +518,7 @@ class UserViewSet(
         user = self.get_object()
         serializer = self.get_serializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        old_role = user.role
-        serializer.save()
-        if "role" in serializer.validated_data and old_role != user.role:
-            record_audit_event(
-                actor=request.user, module=AuditLog.Module.ACCOUNTS,
-                action=AuditLog.Action.CHANGE_ROLE,
-                message=f"غيّر {get_actor_display(request.user)} دور المستخدم {user}.",
-                target=user, metadata={"old_role": old_role, "new_role": user.role},
-            )
+        user = serializer.save()
         return Response(
             {
                 "code": "USER_UPDATED",

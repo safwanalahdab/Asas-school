@@ -20,17 +20,79 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.policies import (
     can_access_web_dashboard,
+    can_change_account_role,
     can_create_role,
     can_update_account,
 )
 from accounts.services import (
     assign_temporary_password,
+    change_user_role,
     increment_token_version,
     temporary_password_is_expired,
 )
 from accounts.permission_catalog import effective_business_permission_codes
+from academics.models import GradeLevel, SupervisorScope
+from academics.supervisor_scope_services import set_supervisor_scope
 
 User = get_user_model()
+
+
+class SupervisorScopeInputSerializer(serializers.Serializer):
+    scope_type = serializers.ChoiceField(choices=SupervisorScope.ScopeType.choices)
+    stages = serializers.ListField(
+        child=serializers.ChoiceField(choices=GradeLevel.Stage.choices),
+        allow_empty=True,
+    )
+
+    def validate(self, attrs):
+        unknown = set(self.initial_data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {name: "هذا الحقل غير مسموح به." for name in unknown}
+            )
+        stages = attrs["stages"]
+        if len(stages) != len(set(stages)):
+            raise serializers.ValidationError(
+                {"stages": "لا يجوز تكرار المرحلة ضمن النطاق."}
+            )
+        if attrs["scope_type"] == SupervisorScope.ScopeType.ALL and stages:
+            raise serializers.ValidationError(
+                {"stages": "يجب أن تكون المراحل فارغة للنطاق الشامل."}
+            )
+        if (
+            attrs["scope_type"] == SupervisorScope.ScopeType.SELECTED_STAGES
+            and not stages
+        ):
+            raise serializers.ValidationError(
+                {"stages": "يجب اختيار مرحلة واحدة على الأقل."}
+            )
+        return attrs
+
+
+class SupervisorScopeField(serializers.Field):
+    def get_attribute(self, instance):
+        return instance
+
+    def to_internal_value(self, data):
+        serializer = SupervisorScopeInputSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        return serializer.validated_data
+
+    def to_representation(self, user):
+        if user.role != User.Role.SUPERVISOR:
+            return None
+        try:
+            scope = user.supervisor_scope
+        except SupervisorScope.DoesNotExist:
+            return None
+        selected = set(scope.stages.values_list("stage", flat=True))
+        ordered = [stage for stage in GradeLevel.Stage.values if stage in selected]
+        return {
+            "scope_type": scope.scope_type,
+            "scope_type_display": scope.get_scope_type_display(),
+            "stages": ordered,
+            "stages_display": [GradeLevel.Stage(stage).label for stage in ordered],
+        }
 
 REQUIRED = "هذا الحقل مطلوب."
 BLANK = "لا يجوز أن يكون هذا الحقل فارغاً."
@@ -46,6 +108,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
         source="get_role_display",
         read_only=True,
     )
+    supervisor_scope = SupervisorScopeField(source="*", read_only=True)
 
     class Meta:
         model = User
@@ -57,6 +120,7 @@ class UserSummarySerializer(serializers.ModelSerializer):
             "last_name",
             "role",
             "role_display",
+            "supervisor_scope",
             "must_change_password",
         ]
         read_only_fields = fields
@@ -370,6 +434,7 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class UserCreateSerializer(serializers.ModelSerializer):
     temporary_password = serializers.CharField(read_only=True)
+    supervisor_scope = SupervisorScopeField(required=False)
     forbidden_fields = {
         "password",
         "is_superuser",
@@ -388,6 +453,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "role",
+            "supervisor_scope",
             "temporary_password",
         ]
         read_only_fields = ["id", "temporary_password"]
@@ -407,13 +473,37 @@ class UserCreateSerializer(serializers.ModelSerializer):
             )
         if not can_create_role(self.context["request"].user, attrs.get("role")):
             raise serializers.ValidationError({"role": "لا يمكنك إنشاء حساب بهذا الدور."})
+        actor = self.context["request"].user
+        role = attrs.get("role")
+        scope_supplied = "supervisor_scope" in attrs
+        if role == User.Role.SUPERVISOR:
+            if not (actor.is_superuser or actor.role == User.Role.SCHOOL_ADMIN):
+                raise serializers.ValidationError(
+                    {"role": "فقط إدارة المدرسة تستطيع إنشاء حساب موجّه."}
+                )
+            if not scope_supplied:
+                raise serializers.ValidationError(
+                    {"supervisor_scope": "نطاق الموجّه مطلوب."}
+                )
+        elif scope_supplied:
+            raise serializers.ValidationError(
+                {"supervisor_scope": "هذا الحقل مسموح فقط لدور الموجّه."}
+            )
         return attrs
 
     def create(self, validated_data):
+        supervisor_scope = validated_data.pop("supervisor_scope", None)
         with transaction.atomic():
             user = User(**validated_data)
             password = assign_temporary_password(user)
             user.save()
+            if supervisor_scope is not None:
+                set_supervisor_scope(
+                    supervisor=user,
+                    scope_type=supervisor_scope["scope_type"],
+                    stages=supervisor_scope["stages"],
+                    actor=self.context["request"].user,
+                )
         user.temporary_password = password
         return user
 
@@ -442,6 +532,7 @@ class UserListSerializer(serializers.ModelSerializer):
     )
 
     full_name = serializers.SerializerMethodField()
+    supervisor_scope = SupervisorScopeField(source="*", read_only=True)
 
     class Meta:
         model = User
@@ -456,6 +547,7 @@ class UserListSerializer(serializers.ModelSerializer):
             "full_name",
             "role",
             "role_display",
+            "supervisor_scope",
             "is_active",
             "must_change_password",
             "date_joined",
@@ -542,6 +634,7 @@ class WebMeUpdateSerializer(serializers.ModelSerializer):
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):
+    supervisor_scope = SupervisorScopeField(required=False)
     forbidden_fields = {
         "password",
         "is_active",
@@ -554,7 +647,14 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["username", "email", "first_name", "last_name", "role"]
+        fields = [
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "role",
+            "supervisor_scope",
+        ]
         extra_kwargs = UserCreateSerializer.Meta.extra_kwargs
 
     def validate(self, attrs):
@@ -564,14 +664,68 @@ class UserUpdateSerializer(serializers.ModelSerializer):
                 {name: "هذا الحقل غير مسموح به." for name in supplied}
             )
         actor = self.context["request"].user
-        if not can_update_account(actor, self.instance, attrs.get("role")):
+        if not can_update_account(actor, self.instance):
             raise PermissionDenied(
                 {
                     "code": "ACCOUNT_UPDATE_FORBIDDEN",
                     "detail": "ليس لديك صلاحية لتعديل هذا الحساب أو تعيين الدور المطلوب.",
                 }
             )
+        role_supplied = "role" in self.initial_data
+        scope_supplied = "supervisor_scope" in self.initial_data
+        if (role_supplied or scope_supplied) and not can_change_account_role(
+            actor, self.instance
+        ):
+            raise PermissionDenied(
+                {
+                    "code": "ACCOUNT_ROLE_OR_SCOPE_UPDATE_FORBIDDEN",
+                    "detail": "فقط إدارة المدرسة تستطيع تعديل الدور أو نطاق الموجّه.",
+                }
+            )
+
+        new_role = attrs.get("role", self.instance.role)
+        role_changes = role_supplied and new_role != self.instance.role
+        if role_changes and new_role == User.Role.SUPERVISOR and not scope_supplied:
+            raise serializers.ValidationError(
+                {"supervisor_scope": "نطاق الموجّه مطلوب عند تعيين هذا الدور."}
+            )
+        if scope_supplied and new_role != User.Role.SUPERVISOR:
+            raise serializers.ValidationError(
+                {"supervisor_scope": "هذا الحقل مسموح فقط لدور الموجّه."}
+            )
         return attrs
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        supervisor_scope = validated_data.pop("supervisor_scope", None)
+        new_role = validated_data.pop("role", instance.role)
+        actor = self.context["request"].user
+        instance = User.objects.select_for_update().get(pk=instance.pk)
+        if not can_update_account(actor, instance):
+            raise PermissionDenied(
+                {
+                    "code": "ACCOUNT_UPDATE_FORBIDDEN",
+                    "detail": "ليس لديك صلاحية لتعديل هذا الحساب.",
+                }
+            )
+
+        if new_role != instance.role:
+            instance, _ = change_user_role(
+                target=instance,
+                new_role=new_role,
+                actor=actor,
+                supervisor_scope=supervisor_scope,
+            )
+        elif supervisor_scope is not None:
+            set_supervisor_scope(
+                supervisor=instance,
+                scope_type=supervisor_scope["scope_type"],
+                stages=supervisor_scope["stages"],
+                actor=actor,
+            )
+            instance.refresh_from_db()
+
+        return super().update(instance, validated_data)
 
 
 class SetUserActiveSerializer(serializers.Serializer):

@@ -55,6 +55,100 @@ def apply_default_role_permissions(user):
     user.user_permissions.set(permissions)
 
 
+def _permissions_for_role(role):
+    from accounts.role_permission_templates import ROLE_PERMISSION_TEMPLATES
+
+    if role not in ROLE_PERMISSION_TEMPLATES:
+        raise ValueError("A valid role is required to apply role permissions.")
+    permission_codes = ROLE_PERMISSION_TEMPLATES[role]
+    query = Q()
+    for permission_code in permission_codes:
+        app_label, codename = permission_code.split(".", 1)
+        query |= Q(content_type__app_label=app_label, codename=codename)
+    permissions = list(Permission.objects.filter(query)) if permission_codes else []
+    resolved = {
+        f"{permission.content_type.app_label}.{permission.codename}"
+        for permission in permissions
+    }
+    missing = permission_codes - resolved
+    if missing:
+        raise ImproperlyConfigured(
+            "Role template permissions are missing from Django: "
+            f"{sorted(missing)}"
+        )
+    return permissions
+
+
+@transaction.atomic
+def change_user_role(*, target, new_role, actor, supervisor_scope=None):
+    from academics.models import SupervisorScope
+    from academics.supervisor_scope_services import set_supervisor_scope
+
+    User = get_user_model()
+    if not actor or not actor.is_authenticated or not actor.is_active:
+        raise PermissionDenied("غير مصرح لك بتغيير دور المستخدم.")
+    if not (actor.is_superuser or actor.role == User.Role.SCHOOL_ADMIN):
+        raise PermissionDenied("فقط إدارة المدرسة تستطيع تغيير أدوار المستخدمين.")
+    if new_role not in User.Role.values:
+        raise ValueError("A valid role is required.")
+
+    locked = User.objects.select_for_update().get(pk=target.pk)
+    if locked.is_superuser:
+        raise PermissionDenied("لا يمكن تغيير دور المدير العام المباشر.")
+    if locked.role == new_role:
+        return locked, False
+    if new_role == User.Role.SUPERVISOR and supervisor_scope is None:
+        raise ValueError("Supervisor scope is required when changing to supervisor.")
+
+    old_role = locked.role
+    before_permissions = direct_business_permission_codes(locked)
+    direct_permissions = list(
+        locked.user_permissions.select_related("content_type")
+    )
+    unmanaged_permissions = [
+        permission
+        for permission in direct_permissions
+        if f"{permission.content_type.app_label}.{permission.codename}"
+        not in ALL_MANAGEABLE_PERMISSIONS
+    ]
+
+    locked.role = new_role
+    locked.save(update_fields=["role"])
+    locked.user_permissions.set(
+        [*unmanaged_permissions, *_permissions_for_role(new_role)]
+    )
+
+    if old_role == User.Role.SUPERVISOR and new_role != User.Role.SUPERVISOR:
+        SupervisorScope.objects.filter(supervisor=locked).delete()
+    if new_role == User.Role.SUPERVISOR:
+        set_supervisor_scope(
+            supervisor=locked,
+            scope_type=supervisor_scope["scope_type"],
+            stages=supervisor_scope["stages"],
+            actor=actor,
+        )
+
+    increment_token_version(locked)
+    after_permissions = direct_business_permission_codes(locked)
+    record_audit_event(
+        actor=actor,
+        module=AuditLog.Module.ACCOUNTS,
+        action=AuditLog.Action.CHANGE_ROLE,
+        message=(
+            f"غيّر {get_actor_display(actor)} دور المستخدم "
+            f"{get_actor_display(locked)}."
+        ),
+        target=locked,
+        metadata={
+            "old_role": old_role,
+            "new_role": new_role,
+            "before_permissions": before_permissions,
+            "after_permissions": after_permissions,
+        },
+    )
+    return locked, True
+
+
 @transaction.atomic
 def replace_user_business_permissions(
     *,
@@ -195,6 +289,16 @@ def increment_token_version(user):
 @transaction.atomic
 def set_account_active(user, is_active, *, actor=None):
     locked_user = type(user).objects.select_for_update().get(pk=user.pk)
+    if actor is not None:
+        from accounts.policies import can_set_account_active
+
+        if not can_set_account_active(actor, locked_user):
+            raise PermissionDenied(
+                {
+                    "code": "SET_ACTIVE_FORBIDDEN",
+                    "detail": "ليس لديك صلاحية لتغيير حالة هذا الحساب.",
+                }
+            )
     if locked_user.is_active == is_active:
         return locked_user, False
 
@@ -216,6 +320,16 @@ def set_account_active(user, is_active, *, actor=None):
 @transaction.atomic
 def reset_account_password(user, *, actor=None):
     locked_user = type(user).objects.select_for_update().get(pk=user.pk)
+    if actor is not None:
+        from accounts.policies import can_reset_account_password
+
+        if not can_reset_account_password(actor, locked_user):
+            raise PermissionDenied(
+                {
+                    "code": "PASSWORD_RESET_FORBIDDEN",
+                    "detail": "ليس لديك صلاحية لإعادة تعيين كلمة مرور هذا الحساب.",
+                }
+            )
     password = assign_temporary_password(locked_user)
     locked_user.save(
         update_fields=[

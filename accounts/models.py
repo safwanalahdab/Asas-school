@@ -51,6 +51,7 @@ class User(AbstractUser):
         SECRETARIAT = "secretariat", "أمانة السر"
         SUPERVISOR = "supervisor", "الموجّه التربوي"
         TEACHER = "teacher", "المعلّم"
+        ACCOUNTANT = "accountant", "المحاسب"
         GUARDIAN = "guardian", "ولي الأمر"
         TECH_SUPPORT = "tech_support", "الدعم التقني"
 

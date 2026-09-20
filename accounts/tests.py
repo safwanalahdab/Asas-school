@@ -107,10 +107,12 @@ class AccountPolicyTests(TestCase):
         secretariat = self.actor(User.Role.SECRETARIAT)
         supervisor = self.actor(User.Role.SUPERVISOR)
         admin = self.actor(User.Role.SCHOOL_ADMIN)
-        self.assertTrue(can_create_role(secretariat, User.Role.GUARDIAN))
-        self.assertTrue(can_create_role(secretariat, User.Role.SUPERVISOR))
-        self.assertFalse(can_create_role(secretariat, User.Role.TEACHER))
+        self.assertTrue(can_create_role(secretariat, User.Role.TEACHER))
+        self.assertTrue(can_create_role(secretariat, User.Role.ACCOUNTANT))
+        self.assertFalse(can_create_role(secretariat, User.Role.GUARDIAN))
+        self.assertFalse(can_create_role(secretariat, User.Role.SUPERVISOR))
         self.assertTrue(can_create_role(supervisor, User.Role.GUARDIAN))
+        self.assertTrue(can_create_role(supervisor, User.Role.TEACHER))
         self.assertFalse(can_create_role(supervisor, User.Role.SUPERVISOR))
         self.assertTrue(
             all(can_create_role(admin, role) for role, _ in User.Role.choices)
@@ -261,7 +263,7 @@ class AccountManagementApiTests(TestCase):
             {"role": User.Role.TEACHER},
             format="json",
         )
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 404)
 
     def test_put_and_delete_are_not_supported(self):
         self.authenticate(self.admin)
@@ -323,7 +325,7 @@ class AccountManagementApiTests(TestCase):
                 {"is_active": False},
                 format="json",
             ).status_code,
-            403,
+            200,
         )
 
     def test_reset_password_updates_cycle_and_invalidates_tokens(self):
@@ -361,7 +363,7 @@ class AccountManagementApiTests(TestCase):
             self.client.post(
                 f"/api/v1/accounts/users/{self.guardian.pk}/reset-password/"
             ).status_code,
-            403,
+            200,
         )
 
     def test_old_access_stays_invalid_after_reactivation(self):
@@ -573,6 +575,24 @@ class WebLoginEnvelopeTests(TestCase):
         self.assertEqual(response.data["code"], "LOGIN_SUCCESS")
         self.assertEqual(response.data["message"], "تم تسجيل الدخول بنجاح.")
         self.assertEqual(response.data["data"]["user"]["username"], self.user.username)
+
+    def test_accountant_can_login_to_web(self):
+        accountant = User.objects.create_user(
+            username="web-accountant",
+            password="AccountantStrong!934",
+            role=User.Role.ACCOUNTANT,
+            must_change_password=False,
+        )
+        response = self.client.post(
+            "/api/v1/auth/web/login/",
+            {
+                "identifier": accountant.username,
+                "password": "AccountantStrong!934",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["data"]["user"]["role"], User.Role.ACCOUNTANT)
 
     def test_login_failure_uses_safe_authentication_envelope(self):
         response = self.client.post(

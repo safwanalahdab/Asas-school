@@ -95,13 +95,13 @@ class AccountsWebAuthorizationTests(TestCase):
         self.authenticate(self.secretariat)
         allowed = self.client.post(
             self.users_url,
-            {"username": "created-guardian", "role": User.Role.GUARDIAN},
+            {"username": "created-accountant", "role": User.Role.ACCOUNTANT},
             format="json",
         )
         self.assertEqual(allowed.status_code, 201)
         denied = self.client.post(
             self.users_url,
-            {"username": "denied-teacher", "role": User.Role.TEACHER},
+            {"username": "denied-guardian", "role": User.Role.GUARDIAN},
             format="json",
         )
         self.assertEqual(denied.status_code, 400)
@@ -181,13 +181,13 @@ class AccountsWebAuthorizationTests(TestCase):
             self.client.post(
                 f"{self.detail_url(self.supervisor)}reset-password/"
             ).status_code,
-            200,
+            404,
         )
         self.assertEqual(
             self.client.post(
                 f"{self.detail_url(self.teacher)}reset-password/"
             ).status_code,
-            403,
+            200,
         )
 
         self.grant(self.teacher, "accounts.reset_user_password")

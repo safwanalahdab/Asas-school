@@ -8,6 +8,7 @@ from accounts.permission_catalog import (
 )
 from accounts.permissions import has_direct_permission
 from accounts.role_permission_templates import ROLE_PERMISSION_TEMPLATES
+from accounts.services import change_user_role
 
 
 def direct_permission_codes(user):
@@ -58,6 +59,16 @@ class PermissionCatalogTests(TestCase):
 
 
 class RoleTemplateBusinessContractTests(TestCase):
+    accountant_permissions = {
+        "finance.view_gradetuitionplan",
+        "finance.view_studentfinancialaccount",
+        "finance.view_payment",
+        "finance.add_payment",
+        "finance.cancel_payment",
+        "finance.view_studentdiscount",
+        "finance.add_studentdiscount",
+        "finance.cancel_discount",
+    }
     behavior_permissions = {
         "behavior.view_behaviornote",
         "behavior.add_behaviornote",
@@ -72,13 +83,13 @@ class RoleTemplateBusinessContractTests(TestCase):
             <= ROLE_PERMISSION_TEMPLATES[User.Role.SUPERVISOR]
         )
 
-    def test_secretariat_can_reset_password_but_supervisor_cannot(self):
+    def test_secretariat_and_supervisor_can_reset_password(self):
         permission = "accounts.reset_user_password"
         self.assertIn(
             permission,
             ROLE_PERMISSION_TEMPLATES[User.Role.SECRETARIAT],
         )
-        self.assertNotIn(
+        self.assertIn(
             permission,
             ROLE_PERMISSION_TEMPLATES[User.Role.SUPERVISOR],
         )
@@ -105,6 +116,26 @@ class RoleTemplateBusinessContractTests(TestCase):
         teacher_permissions = ROLE_PERMISSION_TEMPLATES[User.Role.TEACHER]
         self.assertTrue(self.behavior_permissions.isdisjoint(teacher_permissions))
         self.assertNotIn(self.audit_log_permission, teacher_permissions)
+
+    def test_accountant_gets_exact_finance_permissions_only(self):
+        self.assertEqual(
+            ROLE_PERMISSION_TEMPLATES[User.Role.ACCOUNTANT],
+            frozenset(self.accountant_permissions),
+        )
+        self.assertNotIn(
+            "finance.add_gradetuitionplan",
+            ROLE_PERMISSION_TEMPLATES[User.Role.ACCOUNTANT],
+        )
+        self.assertNotIn(
+            "finance.change_gradetuitionplan",
+            ROLE_PERMISSION_TEMPLATES[User.Role.ACCOUNTANT],
+        )
+        self.assertFalse(
+            any(
+                code.startswith("accounts.")
+                for code in ROLE_PERMISSION_TEMPLATES[User.Role.ACCOUNTANT]
+            )
+        )
 
 
 class DirectPermissionTests(TestCase):
@@ -179,6 +210,9 @@ class NewUserRoleTemplateTests(TestCase):
     def test_tech_support_gets_empty_template(self):
         self.assert_role_template(User.Role.TECH_SUPPORT)
 
+    def test_accountant_gets_exact_template(self):
+        self.assert_role_template(User.Role.ACCOUNTANT)
+
     def test_school_admin_gets_all_catalog_permissions(self):
         admin = self.assert_role_template(User.Role.SCHOOL_ADMIN)
         self.assertEqual(
@@ -189,14 +223,22 @@ class NewUserRoleTemplateTests(TestCase):
     def test_supervisor_gets_exact_template(self):
         self.assert_role_template(User.Role.SUPERVISOR)
 
-    def test_role_change_does_not_reapply_a_template(self):
+    def test_explicit_role_change_replaces_business_permission_template(self):
         user = self.assert_role_template(User.Role.TEACHER)
-        original_permissions = direct_permission_codes(user)
+        admin = User.objects.create_user(
+            username="role-change-admin",
+            role=User.Role.SCHOOL_ADMIN,
+        )
 
-        user.role = User.Role.SECRETARIAT
-        user.save(update_fields=["role"])
-
-        self.assertEqual(direct_permission_codes(user), original_permissions)
+        change_user_role(
+            target=user,
+            new_role=User.Role.SECRETARIAT,
+            actor=admin,
+        )
+        self.assertEqual(
+            direct_permission_codes(user),
+            set(ROLE_PERMISSION_TEMPLATES[User.Role.SECRETARIAT]),
+        )
 
     def test_plain_save_guardian_creation_runs_the_creation_hook(self):
         guardian = User(

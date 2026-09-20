@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.db import models
 
 
@@ -212,6 +213,78 @@ class GradeLevel(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class SupervisorScope(models.Model):
+    class ScopeType(models.TextChoices):
+        ALL = "all", "كل المراحل"
+        SELECTED_STAGES = "selected_stages", "مراحل محددة"
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    supervisor = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="supervisor_scope",
+    )
+
+    scope_type = models.CharField(
+        max_length=30,
+        choices=ScopeType.choices,
+    )
+
+    class Meta:
+        db_table = "academics_supervisor_scope"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(
+                    scope_type__in=["all", "selected_stages"],
+                ),
+                name="academics_supervisor_scope_valid_type",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.supervisor} - {self.get_scope_type_display()}"
+
+
+class SupervisorScopeStage(models.Model):
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+
+    scope = models.ForeignKey(
+        SupervisorScope,
+        on_delete=models.CASCADE,
+        related_name="stages",
+    )
+
+    stage = models.CharField(
+        max_length=40,
+        choices=GradeLevel.Stage.choices,
+    )
+
+    class Meta:
+        db_table = "academics_supervisor_scope_stage"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["scope", "stage"],
+                name="academics_supervisor_scope_unique_stage",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(stage__in=GradeLevel.Stage.values),
+                name="academics_supervisor_scope_valid_stage",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.scope.supervisor} - {self.get_stage_display()}"
 
 
 class Section(models.Model):

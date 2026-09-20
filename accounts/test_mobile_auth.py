@@ -90,7 +90,7 @@ class MobileAuthTests(TestCase):
     def test_login_rejects_every_non_guardian_role_and_inactive_guardian(self):
         for role in (
             User.Role.SCHOOL_ADMIN, User.Role.SECRETARIAT, User.Role.SUPERVISOR,
-            User.Role.TEACHER, User.Role.TECH_SUPPORT,
+            User.Role.TEACHER, User.Role.ACCOUNTANT, User.Role.TECH_SUPPORT,
         ):
             user = User.objects.create_user(
                 username=f"user-{role}", password=self.password, role=role,

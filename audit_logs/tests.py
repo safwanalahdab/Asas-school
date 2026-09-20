@@ -197,7 +197,18 @@ class AuditIntegrationTests(TestCase):
         self.assertEqual(created.status_code, 201)
         user = User.objects.get(username="business-user")
         self.assertEqual(AuditLog.objects.filter(target_id=str(user.id), action=AuditLog.Action.CREATE).count(), 1)
-        self.client.patch(f"/api/v1/accounts/users/{user.id}/", {"role": User.Role.SUPERVISOR}, format="json")
+        role_change = self.client.patch(
+            f"/api/v1/accounts/users/{user.id}/",
+            {
+                "role": User.Role.SUPERVISOR,
+                "supervisor_scope": {
+                    "scope_type": "all",
+                    "stages": [],
+                },
+            },
+            format="json",
+        )
+        self.assertEqual(role_change.status_code, 200)
         self.assertEqual(AuditLog.objects.filter(target_id=str(user.id), action=AuditLog.Action.CHANGE_ROLE).count(), 1)
         self.client.patch(f"/api/v1/accounts/users/{user.id}/", {"role": User.Role.SUPERVISOR}, format="json")
         self.assertEqual(AuditLog.objects.filter(target_id=str(user.id), action=AuditLog.Action.CHANGE_ROLE).count(), 1)

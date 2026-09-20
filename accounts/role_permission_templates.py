@@ -41,6 +41,9 @@ _SUPERVISOR_PERMISSIONS = _permissions_for_modules(
     "teaching",
 ) | {
     "accounts.add_user",
+    "accounts.change_user",
+    "accounts.reset_user_password",
+    "accounts.set_user_active",
     "accounts.view_user",
 }
 
@@ -61,12 +64,24 @@ _TEACHER_PERMISSIONS = {
     "teaching.view_teacherassignment",
 }
 
+_ACCOUNTANT_PERMISSIONS = {
+    "finance.view_gradetuitionplan",
+    "finance.view_studentfinancialaccount",
+    "finance.view_payment",
+    "finance.add_payment",
+    "finance.cancel_payment",
+    "finance.view_studentdiscount",
+    "finance.add_studentdiscount",
+    "finance.cancel_discount",
+}
+
 
 ROLE_PERMISSION_TEMPLATES = {
     User.Role.SCHOOL_ADMIN: frozenset(ALL_MANAGEABLE_PERMISSIONS),
     User.Role.SECRETARIAT: frozenset(_SECRETARIAT_PERMISSIONS),
     User.Role.SUPERVISOR: frozenset(_SUPERVISOR_PERMISSIONS),
     User.Role.TEACHER: frozenset(_TEACHER_PERMISSIONS),
+    User.Role.ACCOUNTANT: frozenset(_ACCOUNTANT_PERMISSIONS),
     User.Role.GUARDIAN: frozenset(),
     User.Role.TECH_SUPPORT: frozenset(),
 }
