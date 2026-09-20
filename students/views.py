@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -16,11 +18,17 @@ from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from accounts.models import User
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from behavior.permissions import IsWebClientToken
+from academics.supervisor_academic_scope import (
+    can_access_section,
+    filter_enrollments_by_supervisor_scope,
+    filter_students_by_supervisor_scope,
+    is_stage_scoped_supervisor,
+)
 
 from .filters import (
     EnrollmentFilter,
@@ -152,7 +160,10 @@ class StudentHealthProfileView(ArabicApiResponseMixin, APIView):
     }
 
     def get_profile(self):
-        student = get_object_or_404(Student, pk=self.kwargs["student_id"])
+        students = filter_students_by_supervisor_scope(
+            Student.objects.all(), self.request.user
+        )
+        student = get_object_or_404(students, pk=self.kwargs["student_id"])
         return ensure_student_health_profile(student)
 
     @extend_schema(responses=StudentHealthProfileSerializer)
@@ -251,13 +262,10 @@ class StudentViewSet(
 
         user = self.request.user
 
-        if user.is_superuser or user.role != User.Role.TEACHER:
-            return queryset
-
-        if user.role == User.Role.TEACHER:
+        if not user.is_superuser and user.role == User.Role.TEACHER:
             today = timezone.localdate()
 
-            return queryset.filter(
+            queryset = queryset.filter(
                 Q(
                     enrollments__section__teacher_assignments__teacher=user,
                 )
@@ -271,7 +279,7 @@ class StudentViewSet(
                 )
             ).distinct()
 
-        return queryset.none()
+        return filter_students_by_supervisor_scope(queryset, user)
 
     def destroy(self, request, *args, **kwargs):
         try:
@@ -418,8 +426,47 @@ class GuardianStudentViewSet(
         "-created_at",
     ]
 
+    def create(self, request, *args, **kwargs):
+        raw_student_id = request.data.get("student")
+        if is_stage_scoped_supervisor(request.user) and raw_student_id:
+            try:
+                student_id = UUID(str(raw_student_id))
+            except (TypeError, ValueError, AttributeError):
+                pass
+            else:
+                eligible = filter_students_by_supervisor_scope(
+                    Student.objects.filter(pk=student_id), request.user
+                ).exists()
+                if not eligible:
+                    raise PermissionDenied(
+                        {
+                            "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                            "detail": "الطالب المحدد خارج نطاق مراحل الموجّه.",
+                        }
+                    )
+        return super().create(request, *args, **kwargs)
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        eligible_students = filter_students_by_supervisor_scope(
+            Student.objects.all(), self.request.user
+        )
+        return queryset.filter(
+            student_id__in=eligible_students.values("pk")
+        )
+
     @transaction.atomic
     def perform_create(self, serializer):
+        student = serializer.validated_data["student"]
+        if not filter_students_by_supervisor_scope(
+            Student.objects.filter(pk=student.pk), self.request.user
+        ).exists():
+            raise PermissionDenied(
+                {
+                    "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                    "detail": "الطالب المحدد خارج نطاق مراحل الموجّه.",
+                }
+            )
         link = serializer.save()
         actor_name = get_actor_display(self.request.user)
         record_audit_event(
@@ -489,6 +536,7 @@ class EnrollmentViewSet(
 
     @transaction.atomic
     def perform_create(self, serializer):
+        self._check_supervisor_section_scope(serializer.validated_data["section"])
         enrollment = serializer.save()
 
         ensure_financial_account_for_enrollment(
@@ -538,13 +586,10 @@ class EnrollmentViewSet(
 
         user = self.request.user
 
-        if user.is_superuser or user.role != User.Role.TEACHER:
-            return queryset
-
-        if user.role == User.Role.TEACHER:
+        if not user.is_superuser and user.role == User.Role.TEACHER:
             today = timezone.localdate()
 
-            return queryset.filter(
+            queryset = queryset.filter(
                 Q(
                     section__teacher_assignments__teacher=user,
                 )
@@ -558,7 +603,23 @@ class EnrollmentViewSet(
                 )
             ).distinct()
 
-        return queryset.none()
+        return filter_enrollments_by_supervisor_scope(queryset, user)
+
+    def _check_supervisor_section_scope(self, section):
+        if not can_access_section(self.request.user, section):
+            raise PermissionDenied(
+                {
+                    "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                    "detail": "الشعبة المحددة خارج نطاق مراحل الموجّه.",
+                }
+            )
+
+    def perform_update(self, serializer):
+        section = serializer.validated_data.get(
+            "section", serializer.instance.section
+        )
+        self._check_supervisor_section_scope(section)
+        return super().perform_update(serializer)
 
     def destroy(self, request, *args, **kwargs):
         enrollment = self.get_object()
@@ -594,6 +655,7 @@ class EnrollmentViewSet(
         )
 
         target_section = serializer.validated_data["section"]
+        self._check_supervisor_section_scope(target_section)
 
         transferred_enrollment = transfer_student_between_sections(
             enrollment=enrollment,

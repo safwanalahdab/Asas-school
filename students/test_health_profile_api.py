@@ -5,6 +5,7 @@ from rest_framework.test import APIClient
 
 from students.models import Student, StudentHealthProfile
 from students.views import StudentHealthProfileView
+from academics.models import SupervisorScope
 
 
 User = get_user_model()
@@ -39,6 +40,11 @@ class StudentHealthProfileApiTests(TestCase):
             role=role,
             must_change_password=False,
         )
+        if role == User.Role.SUPERVISOR:
+            SupervisorScope.objects.create(
+                supervisor=user,
+                scope_type=SupervisorScope.ScopeType.ALL,
+            )
         self.client.force_authenticate(user, token={"client": "web"})
         return user
 

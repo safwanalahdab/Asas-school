@@ -2,7 +2,7 @@ from django.db.models.deletion import ProtectedError
 from django.db import transaction
 from django.db.models import Count, Q
 from rest_framework import viewsets
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from config.api_responses import ArabicApiResponseMixin
 from audit_logs.models import AuditLog
@@ -40,6 +40,13 @@ ACADEMIC_HTTP_METHODS = (
     "head",
     "options",
 )
+from .supervisor_academic_scope import (
+    can_access_grade_level,
+    can_change_grade_level_stage,
+    can_manage_global_academic_resources,
+    filter_queryset_by_stage,
+    is_stage_allowed,
+)
 
 ACADEMIC_PERMISSION_CLASSES = [
     IsAuthenticated,
@@ -73,7 +80,92 @@ class _AtomicCrudMixin:
         instance.delete()
 
 
-class AcademicYearViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
+class _SupervisorGlobalAcademicWriteMixin:
+    supervisor_scope_denied_message = {
+        "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+        "detail": "لا يسمح نطاق الموجّه المحدد بالمراحل بتعديل هذا المورد الأكاديمي العام.",
+    }
+
+    def _check_supervisor_global_write(self):
+        if not can_manage_global_academic_resources(self.request.user):
+            raise PermissionDenied(self.supervisor_scope_denied_message)
+
+    def create(self, request, *args, **kwargs):
+        self._check_supervisor_global_write()
+        return super().create(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        self._check_supervisor_global_write()
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        self._check_supervisor_global_write()
+        return super().destroy(request, *args, **kwargs)
+
+
+class _SupervisorStageResourceMixin:
+    supervisor_stage_lookup = "stage"
+    supervisor_scope_denied_message = {
+        "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+        "detail": "السجل الأكاديمي المحدد خارج نطاق مراحل الموجّه.",
+    }
+
+    def get_queryset(self):
+        return filter_queryset_by_stage(
+            super().get_queryset(),
+            self.request.user,
+            stage_lookup=self.supervisor_stage_lookup,
+        )
+
+    def _check_supervisor_write_target(self, serializer):
+        raise NotImplementedError
+
+    def perform_create(self, serializer):
+        self._check_supervisor_write_target(serializer)
+        return super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        self._check_supervisor_write_target(serializer)
+        return super().perform_update(serializer)
+
+    def _deny_out_of_scope(self):
+        raise PermissionDenied(self.supervisor_scope_denied_message)
+
+
+class _SupervisorGradeLevelScopeMixin(_SupervisorStageResourceMixin):
+    def _check_supervisor_write_target(self, serializer):
+        stage = serializer.validated_data.get(
+            "stage", getattr(serializer.instance, "stage", None)
+        )
+        if serializer.instance is None:
+            if not is_stage_allowed(self.request.user, stage):
+                self._deny_out_of_scope()
+            return
+        if not can_change_grade_level_stage(
+            self.request.user, serializer.instance, stage
+        ):
+            self._deny_out_of_scope()
+
+
+class _SupervisorGradeLevelRelationScopeMixin(_SupervisorStageResourceMixin):
+    supervisor_stage_lookup = "grade_level__stage"
+
+    def _check_supervisor_write_target(self, serializer):
+        grade_level = serializer.validated_data.get(
+            "grade_level", getattr(serializer.instance, "grade_level", None)
+        )
+        if grade_level is None or not can_access_grade_level(
+            self.request.user, grade_level
+        ):
+            self._deny_out_of_scope()
+
+
+class AcademicYearViewSet(
+    ArabicApiResponseMixin,
+    _SupervisorGlobalAcademicWriteMixin,
+    _AtomicCrudMixin,
+    viewsets.ModelViewSet,
+):
     response_messages = {
         "list": ("ACADEMIC_YEARS_RETRIEVED", "تم جلب قائمة السنوات الدراسية بنجاح."),
         "retrieve": ("ACADEMIC_YEAR_RETRIEVED", "تم جلب السنة الدراسية بنجاح."),
@@ -143,7 +235,12 @@ class AcademicYearViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.Mod
             )
 
 
-class TermViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
+class TermViewSet(
+    ArabicApiResponseMixin,
+    _SupervisorGlobalAcademicWriteMixin,
+    _AtomicCrudMixin,
+    viewsets.ModelViewSet,
+):
     response_messages = {
         "list": ("TERMS_RETRIEVED", "تم جلب قائمة الفصول الدراسية بنجاح."),
         "retrieve": ("TERM_RETRIEVED", "تم جلب الفصل الدراسي بنجاح."),
@@ -203,7 +300,12 @@ class TermViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSe
             )
 
 
-class GradeLevelViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
+class GradeLevelViewSet(
+    ArabicApiResponseMixin,
+    _SupervisorGradeLevelScopeMixin,
+    _AtomicCrudMixin,
+    viewsets.ModelViewSet,
+):
     response_messages = {
         "list": ("GRADE_LEVELS_RETRIEVED", "تم جلب قائمة الصفوف الدراسية بنجاح."),
         "retrieve": ("GRADE_LEVEL_RETRIEVED", "تم جلب الصف الدراسي بنجاح."),
@@ -270,7 +372,12 @@ class GradeLevelViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.Model
             )
 
 
-class SectionViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
+class SectionViewSet(
+    ArabicApiResponseMixin,
+    _SupervisorGradeLevelRelationScopeMixin,
+    _AtomicCrudMixin,
+    viewsets.ModelViewSet,
+):
     response_messages = {
         "list": ("SECTIONS_RETRIEVED", "تم جلب قائمة الشعب بنجاح."),
         "retrieve": ("SECTION_RETRIEVED", "تم جلب الشعبة بنجاح."),
@@ -340,7 +447,12 @@ class SectionViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelVie
             )
 
 
-class SubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
+class SubjectViewSet(
+    ArabicApiResponseMixin,
+    _SupervisorGlobalAcademicWriteMixin,
+    _AtomicCrudMixin,
+    viewsets.ModelViewSet,
+):
     response_messages = {
         "list": ("SUBJECTS_RETRIEVED", "تم جلب قائمة المواد بنجاح."),
         "retrieve": ("SUBJECT_RETRIEVED", "تم جلب المادة بنجاح."),
@@ -397,7 +509,12 @@ class SubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelVie
             )
 
 
-class GradeSubjectViewSet(ArabicApiResponseMixin, _AtomicCrudMixin, viewsets.ModelViewSet):
+class GradeSubjectViewSet(
+    ArabicApiResponseMixin,
+    _SupervisorGradeLevelRelationScopeMixin,
+    _AtomicCrudMixin,
+    viewsets.ModelViewSet,
+):
     response_messages = {
         "list": ("GRADE_SUBJECTS_RETRIEVED", "تم جلب الخطة الدراسية بنجاح."),
         "retrieve": ("GRADE_SUBJECT_RETRIEVED", "تم جلب مادة الخطة الدراسية بنجاح."),

@@ -19,8 +19,9 @@ RECORDED_ATTENDANCE_STATUSES = (
 )
 
 
-def get_profile_student(student_id):
-    student = Student.objects.filter(pk=student_id).first()
+def get_profile_student(student_id, *, queryset=None):
+    queryset = queryset if queryset is not None else Student.objects.all()
+    student = queryset.filter(pk=student_id).first()
     if student is None:
         raise NotFound(
             {

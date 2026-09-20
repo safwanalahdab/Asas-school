@@ -9,9 +9,11 @@ from behavior.permissions import IsWebClientToken
 from config.api_responses import ArabicApiResponseMixin
 from finance.models import Payment, StudentDiscount
 from finance.services import calculate_account_totals
+from academics.supervisor_academic_scope import filter_students_by_supervisor_scope
 
 from .profile_pagination import paginate_profile_queryset
 from .profile_permissions import CanViewStudentProfileRole
+from .models import Student
 from .profile_selectors import (
     get_attendance_data,
     get_behavior_data,
@@ -115,13 +117,16 @@ class StudentProfileView(ArabicApiResponseMixin, APIView):
         },
     )
     def get(self, request, student_id):
-        student = get_profile_student(student_id)
+        eligible_students = filter_students_by_supervisor_scope(
+            Student.objects.all(), request.user
+        )
+        student = get_profile_student(student_id, queryset=eligible_students)
         academic_year = get_profile_academic_year(
             request.query_params.get("academic_year")
         )
+        enrollment = get_profile_enrollment(student, academic_year)
         guardians = get_profile_guardians(student)
         health_profile = get_profile_health(student)
-        enrollment = get_profile_enrollment(student, academic_year)
 
         attendance_records, attendance_summary = get_attendance_data(enrollment)
         grade_records = get_grade_records(enrollment)

@@ -8,7 +8,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from academics.models import AcademicYear, GradeLevel, GradeSubject, Section, Subject, Term
+from academics.models import AcademicYear, GradeLevel, GradeSubject, Section, Subject, SupervisorScope, Term
 from accounts.models import User
 from accounts.permission_catalog import ALL_MANAGEABLE_PERMISSIONS
 from accounts.role_permission_templates import ROLE_PERMISSION_TEMPLATES
@@ -107,6 +107,10 @@ class StudentProfileApiTests(TestCase):
             user.user_permissions.clear()
         for user in (cls.admin, cls.secretariat, cls.supervisor):
             user.user_permissions.add(cls.permission)
+        SupervisorScope.objects.create(
+            supervisor=cls.supervisor,
+            scope_type=SupervisorScope.ScopeType.ALL,
+        )
 
         GuardianStudent.objects.create(
             guardian=cls.guardian,
