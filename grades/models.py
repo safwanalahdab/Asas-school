@@ -21,6 +21,7 @@ class Assessment(models.Model):
 
     class Meta:
         permissions = [
+            ("correct_published_grades", "تصحيح العلامات المنشورة"),
             ("publish_grades", "نشر العلامات"),
             ("create_grade_wide_assessment", "إنشاء تقييم لجميع شعب الصف"),
         ]

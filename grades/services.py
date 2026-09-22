@@ -7,6 +7,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from academics.models import Section
+from accounts.permissions import has_direct_permission
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from notifications.services import create_notification
@@ -59,6 +60,16 @@ def ensure_actor_can_manage_scope(*, actor, section, grade_subject):
     ):
         return
     raise PermissionDenied({"code": "GRADE_ASSIGNMENT_REQUIRED", "detail": "ليس لديك تكليف فعال لإدارة هذه المادة والشعبة."})
+
+
+def ensure_can_edit_published_score(*, actor, link):
+    if link.status != AssessmentSection.Status.PUBLISHED:
+        return
+    if not actor.is_superuser and actor.role not in (User.Role.SCHOOL_ADMIN, User.Role.SUPERVISOR):
+        raise PermissionDenied("Published grades cannot be changed by this role.")
+    if not has_direct_permission(actor, "grades.correct_published_grades"):
+        raise PermissionDenied("Published grade correction permission is required.")
+    require_section(actor, link.section)
 
 
 def _validate_definition(*, title, max_score, term, assessment_date):
@@ -197,6 +208,7 @@ def save_assessment_scores_bulk(*, assessment, section, records, actor, source=S
     assessment = Assessment.objects.select_for_update().select_related("grade_subject").get(pk=assessment.pk)
     link = AssessmentSection.objects.select_for_update().select_related("section").get(assessment=assessment, section=section)
     ensure_actor_can_manage_scope(actor=actor, section=link.section, grade_subject=assessment.grade_subject)
+    ensure_can_edit_published_score(actor=actor, link=link)
     ids = [record["enrollment"].id for record in records]
     if not ids or len(ids) != len(set(ids)):
         raise ValidationError({"records": "يجب إرسال سجلات غير مكررة لطالب واحد على الأقل."})

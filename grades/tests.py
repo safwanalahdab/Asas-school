@@ -3,6 +3,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.contrib import admin
 from django.test import TestCase, override_settings
 from django.test import RequestFactory
@@ -87,6 +88,40 @@ class GradesRefactorTests(TestCase):
         self.assertTrue(ScoreAuditLog.objects.filter(old_score=Decimal("0"), new_score__isnull=True).exists())
         with self.assertRaises(ValidationError):
             save_assessment_scores_bulk(assessment=assessment, section=self.a, records=[{"enrollment": self.enrollment, "score": Decimal("21")}], actor=self.admin)
+
+    def test_published_score_requires_correction_permission_and_keeps_audit(self):
+        permission = Permission.objects.get(
+            content_type__app_label="grades", codename="correct_published_grades",
+        )
+        self.admin.user_permissions.remove(permission)
+        assessment = self.assessment()
+        records = [{"enrollment": self.enrollment, "score": Decimal("12")}]
+        save_assessment_scores_bulk(assessment=assessment, section=self.a, records=records, actor=self.teacher)
+        link = assessment.assessment_sections.get(section=self.a)
+        link.status = AssessmentSection.Status.PUBLISHED
+        link.published_by = self.admin
+        link.published_at = timezone.now()
+        link.save(update_fields=["status", "published_by", "published_at"])
+
+        records[0]["score"] = Decimal("15")
+        for actor in (self.teacher, self.admin):
+            with self.assertRaises(PermissionDenied):
+                save_assessment_scores_bulk(assessment=assessment, section=self.a, records=records, actor=actor)
+        score = StudentScore.objects.get(assessment=assessment)
+        self.assertEqual(score.score, Decimal("12"))
+        self.assertEqual(ScoreAuditLog.objects.filter(assessment=assessment).count(), 1)
+
+        self.admin.user_permissions.add(permission)
+        save_assessment_scores_bulk(assessment=assessment, section=self.a, records=records, actor=self.admin)
+        score.refresh_from_db()
+        self.assertEqual(score.score, Decimal("15"))
+        self.assertTrue(ScoreAuditLog.objects.filter(
+            assessment=assessment, old_score=Decimal("12"),
+            new_score=Decimal("15"), actor=self.admin,
+        ).exists())
+        self.teacher.user_permissions.add(permission)
+        with self.assertRaises(PermissionDenied):
+            save_assessment_scores_bulk(assessment=assessment, section=self.a, records=records, actor=self.teacher)
 
     def test_late_enrollment_is_not_in_sheet(self):
         assessment = self.assessment(when=date(2026, 2, 1))

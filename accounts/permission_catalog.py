@@ -77,6 +77,7 @@ PERMISSION_CATALOG = tuple(
         ("grades.add_assessment", "إضافة تقييم"),
         ("grades.change_assessment", "تعديل تقييم"),
         ("grades.change_studentscore", "تعديل علامة طالب"),
+        ("grades.correct_published_grades", "تصحيح العلامات المنشورة"),
         ("grades.create_grade_wide_assessment", "إنشاء تقييم لجميع شعب الصف"),
         ("grades.delete_assessment", "حذف تقييم"),
         ("grades.publish_grades", "نشر العلامات"),

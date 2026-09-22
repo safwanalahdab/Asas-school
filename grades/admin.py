@@ -56,6 +56,16 @@ class StudentScoreAdmin(admin.ModelAdmin):
         return obj.enrollment.student.full_name
 
     def save_model(self, request, obj, form, change):
+        from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
+        from rest_framework.exceptions import PermissionDenied as ApiPermissionDenied
+        from .services import ensure_can_edit_published_score
+        link = AssessmentSection.objects.get(
+            assessment=obj.assessment, section=obj.recorded_section,
+        )
+        try:
+            ensure_can_edit_published_score(actor=request.user, link=link)
+        except ApiPermissionDenied as exc:
+            raise DjangoPermissionDenied from exc
         old_score = None
         if change:
             old_score = StudentScore.objects.get(pk=obj.pk).score

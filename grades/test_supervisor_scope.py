@@ -111,3 +111,35 @@ class GradesSupervisorScopeTests(TestCase):
         base = "/api/v1/grades/assessments/"
         self.assertEqual(self.client.get(base).data["data"]["count"], 0)
         self.assertEqual(self.client.get(f"{base}{assessment.id}/").status_code, 404)
+
+    def test_published_correction_respects_supervisor_scope(self):
+        self.scope("primary")
+        base = "/api/v1/grades/assessments/"
+        for stage in ("primary", "preparatory"):
+            _, section, _, assessment, enrollment = self.grades[stage]
+            link = assessment.assessment_sections.get(section=section)
+            link.status = AssessmentSection.Status.PUBLISHED
+            link.published_by = self.user
+            from django.utils import timezone
+            link.published_at = timezone.now()
+            link.save(update_fields=["status", "published_by", "published_at"])
+
+        def correct(stage):
+            _, section, _, assessment, enrollment = self.grades[stage]
+            return self.client.post(
+                f"{base}{assessment.id}/scores/bulk/",
+                {"section": str(section.id), "records": [
+                    {"enrollment": str(enrollment.id), "score": "17"},
+                ]}, format="json",
+            )
+
+        self.user.user_permissions.remove(Permission.objects.get(
+            content_type__app_label="grades", codename="correct_published_grades",
+        ))
+        self.assertEqual(correct("primary").status_code, 403)
+        self.user.user_permissions.add(Permission.objects.get(
+            content_type__app_label="grades", codename="correct_published_grades",
+        ))
+        self.assertEqual(correct("primary").status_code, 200)
+        self.assertEqual(correct("preparatory").status_code, 404)
+        self.assertEqual(StudentScore.objects.count(), 1)
