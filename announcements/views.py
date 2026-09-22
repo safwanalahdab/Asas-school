@@ -1,6 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 
 from rest_framework.permissions import IsAuthenticated
@@ -8,6 +8,13 @@ from rest_framework.viewsets import ModelViewSet
 
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from academics.models import AcademicYear
+from academics.models import GradeLevel, Section
+from academics.supervisor_academic_scope import (
+    can_access_grade_level,
+    can_access_section,
+    supervisor_academic_scope_for,
+)
+from rest_framework.exceptions import PermissionDenied
 from config.api_responses import ArabicApiResponseMixin
 from students.models import Enrollment
 from teaching.models import TeacherAssignment
@@ -110,6 +117,33 @@ class AnnouncementViewSet(
         if user.is_superuser:
             return queryset
 
+        supervisor_scope = supervisor_academic_scope_for(user)
+        if supervisor_scope.applies:
+            if not supervisor_scope.scope_type:
+                return queryset.none()
+            if supervisor_scope.allows_all_stages:
+                return queryset
+
+            linked_grades = GradeLevel.objects.filter(announcements=OuterRef("pk"))
+            linked_sections = Section.objects.filter(announcements=OuterRef("pk"))
+            queryset = queryset.annotate(
+                _has_grades=Exists(linked_grades),
+                _has_sections=Exists(linked_sections),
+                _outside_grades=Exists(
+                    linked_grades.exclude(stage__in=supervisor_scope.stages)
+                ),
+                _outside_sections=Exists(
+                    linked_sections.exclude(grade_level__stage__in=supervisor_scope.stages)
+                ),
+            )
+            return queryset.filter(
+                Q(scope=Announcement.Scope.ALL, _has_grades=False, _has_sections=False)
+                | Q(scope=Announcement.Scope.GRADES, _has_grades=True,
+                    _has_sections=False, _outside_grades=False)
+                | Q(scope=Announcement.Scope.SECTIONS, _has_sections=True,
+                    _has_grades=False, _outside_sections=False)
+            )
+
         today = timezone.localdate()
 
         visible_now = (
@@ -197,9 +231,46 @@ class AnnouncementViewSet(
 
         return queryset
 
+    def require_supervisor_targets(self, serializer):
+        user = self.request.user
+        scope = supervisor_academic_scope_for(user)
+        if not scope.applies or scope.allows_all_stages:
+            return
+        if not scope.scope_type:
+            raise PermissionDenied({
+                "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                "detail": "الإعلان خارج نطاق مراحل الموجّه.",
+            })
+
+        instance = serializer.instance
+        announcement_scope = serializer.validated_data.get(
+            "scope", getattr(instance, "scope", None)
+        )
+        grade_levels = serializer.validated_data.get("grade_levels")
+        sections = serializer.validated_data.get("sections")
+        if grade_levels is None:
+            grade_levels = list(instance.grade_levels.all()) if instance else []
+        if sections is None:
+            sections = list(instance.sections.all()) if instance else []
+        if (
+            (announcement_scope == Announcement.Scope.GRADES and not grade_levels)
+            or (announcement_scope == Announcement.Scope.SECTIONS and not sections)
+            or any(not can_access_grade_level(user, grade) for grade in grade_levels)
+            or any(not can_access_section(user, section) for section in sections)
+        ):
+            raise PermissionDenied({
+                "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                "detail": "الإعلان خارج نطاق مراحل الموجّه.",
+            })
+
     @transaction.atomic
     def perform_create(self, serializer):
+        self.require_supervisor_targets(serializer)
         announcement = serializer.save(
             created_by=self.request.user,
         )
         notify_announcement_published(announcement)
+
+    def perform_update(self, serializer):
+        self.require_supervisor_targets(serializer)
+        serializer.save()

@@ -5,12 +5,18 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.models import User
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from academics.supervisor_academic_scope import (
+    can_access_enrollment,
+    can_access_section,
+    filter_queryset_by_stage,
+)
 from teaching.models import TeacherAssignment
 from config.api_responses import ArabicApiResponseMixin
 
@@ -34,6 +40,17 @@ from .services import (
     get_effective_attendance_roster,
     update_attendance_record,
 )
+
+
+SUPERVISOR_ATTENDANCE_SCOPE_DENIED = {
+    "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+    "detail": "الشعبة المحددة خارج نطاق مراحل الموجّه.",
+}
+
+
+def _check_supervisor_section_scope(user, section):
+    if not can_access_section(user, section):
+        raise PermissionDenied(SUPERVISOR_ATTENDANCE_SCOPE_DENIED)
 
 
 class AttendanceSheetViewSet(
@@ -135,18 +152,22 @@ class AttendanceSheetViewSet(
         if not user.is_authenticated:
             return queryset.none()
 
-        if user.is_superuser or user.role != User.Role.TEACHER:
-            return queryset
+        if not user.is_superuser and user.role == User.Role.TEACHER:
+            today = timezone.localdate()
+            active_assignments = TeacherAssignment.objects.filter(
+                teacher=user,
+                section_id=OuterRef("section_id"),
+                start_date__lte=today,
+            ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
+            queryset = queryset.annotate(
+                teacher_has_access=Exists(active_assignments)
+            ).filter(teacher_has_access=True)
 
-        today = timezone.localdate()
-        active_assignments = TeacherAssignment.objects.filter(
-            teacher=user,
-            section_id=OuterRef("section_id"),
-            start_date__lte=today,
-        ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
-        return queryset.annotate(
-            teacher_has_access=Exists(active_assignments)
-        ).filter(teacher_has_access=True)
+        return filter_queryset_by_stage(
+            queryset,
+            user,
+            stage_lookup="section__grade_level__stage",
+        )
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -168,6 +189,14 @@ class AttendanceSheetViewSet(
         serializer.is_valid(
             raise_exception=True,
         )
+
+        _check_supervisor_section_scope(
+            request.user,
+            serializer.validated_data["section"],
+        )
+        for item in serializer.validated_data["records"]:
+            if not can_access_enrollment(request.user, item["enrollment"]):
+                raise PermissionDenied(SUPERVISOR_ATTENDANCE_SCOPE_DENIED)
 
         sheet = create_attendance_sheet(
             actor=request.user,
@@ -192,6 +221,10 @@ class AttendanceSheetViewSet(
     def roster(self, request):
         query_serializer = AttendanceRosterQuerySerializer(data=request.query_params)
         query_serializer.is_valid(raise_exception=True)
+        _check_supervisor_section_scope(
+            request.user,
+            query_serializer.validated_data["section"],
+        )
         ensure_actor_can_manage_attendance_scope(
             actor=request.user,
             section=query_serializer.validated_data["section"],
@@ -381,18 +414,22 @@ class AttendanceRecordViewSet(
         if not user.is_authenticated:
             return queryset.none()
 
-        if user.is_superuser or user.role != User.Role.TEACHER:
-            return queryset
+        if not user.is_superuser and user.role == User.Role.TEACHER:
+            today = timezone.localdate()
+            active_assignments = TeacherAssignment.objects.filter(
+                teacher=user,
+                section_id=OuterRef("sheet__section_id"),
+                start_date__lte=today,
+            ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
+            queryset = queryset.annotate(
+                teacher_has_access=Exists(active_assignments)
+            ).filter(teacher_has_access=True)
 
-        today = timezone.localdate()
-        active_assignments = TeacherAssignment.objects.filter(
-            teacher=user,
-            section_id=OuterRef("sheet__section_id"),
-            start_date__lte=today,
-        ).filter(Q(end_date__isnull=True) | Q(end_date__gte=today))
-        return queryset.annotate(
-            teacher_has_access=Exists(active_assignments)
-        ).filter(teacher_has_access=True)
+        return filter_queryset_by_stage(
+            queryset,
+            user,
+            stage_lookup="sheet__section__grade_level__stage",
+        )
 
     def partial_update(self, request, *args, **kwargs):
         record = self.get_object()

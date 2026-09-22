@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db.models import (
     Exists,
+    F,
     OuterRef,
     Q,
 )
@@ -29,7 +30,11 @@ from teaching.models import TeacherAssignment
 
 from .filters import AssessmentFilter
 from academics.models import Section
-from .models import Assessment
+from academics.supervisor_academic_scope import filter_queryset_by_stage, is_stage_scoped_supervisor
+from .supervisor_scope import (
+    require_assessment, require_enrollment, require_grade_level, require_section,
+)
+from .models import Assessment, AssessmentSection, StudentScore
 from .permissions import IsWebClientToken
 from .selectors import (
     get_assessment_score_rows,
@@ -227,6 +232,34 @@ class AssessmentViewSet(
             return queryset
 
         if user.role != User.Role.TEACHER:
+            if is_stage_scoped_supervisor(user):
+                queryset = filter_queryset_by_stage(
+                    queryset, user, stage_lookup="grade_subject__grade_level__stage"
+                )
+                mismatched_links = AssessmentSection.objects.exclude(
+                    section__grade_level_id=F("assessment__grade_subject__grade_level_id"),
+                    section__academic_year_id=F("assessment__grade_subject__academic_year_id"),
+                ).values("assessment_id")
+                mismatched_scores = StudentScore.objects.exclude(
+                    recorded_section__grade_level_id=F("assessment__grade_subject__grade_level_id"),
+                    recorded_section__academic_year_id=F("assessment__grade_subject__academic_year_id"),
+                ).values("assessment_id")
+                unlinked_scores = StudentScore.objects.annotate(
+                    has_link=Exists(AssessmentSection.objects.filter(
+                        assessment_id=OuterRef("assessment_id"),
+                        section_id=OuterRef("recorded_section_id"),
+                    ))
+                ).filter(has_link=False).values("assessment_id")
+                queryset = (queryset.exclude(pk__in=mismatched_links)
+                            .exclude(pk__in=mismatched_scores)
+                            .exclude(pk__in=unlinked_scores))
+                scope = filter_queryset_by_stage(
+                    AssessmentSection.objects.all(), user,
+                    stage_lookup="section__grade_level__stage",
+                )
+                queryset = queryset.exclude(
+                    pk__in=AssessmentSection.objects.exclude(pk__in=scope.values("pk")).values("assessment_id")
+                )
             return queryset
 
         if user.role == User.Role.TEACHER:
@@ -266,6 +299,11 @@ class AssessmentViewSet(
 
         return queryset.none()
 
+    def get_object(self):
+        assessment = super().get_object()
+        require_assessment(self.request.user, assessment)
+        return assessment
+
     @extend_schema(
         request=CreateAssessmentSerializer,
         responses={
@@ -286,6 +324,9 @@ class AssessmentViewSet(
         serializer.is_valid(
             raise_exception=True,
         )
+
+        require_grade_level(request.user, serializer.validated_data["grade_subject"].grade_level)
+        require_section(request.user, serializer.validated_data["section"])
 
         assessment = create_assessment(
             actor=request.user,
@@ -406,6 +447,8 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
+        require_grade_level(request.user, serializer.validated_data["grade_subject"].grade_level)
+
         assessment = (
             create_assessments_for_grade(
                 actor=request.user,
@@ -455,6 +498,7 @@ class AssessmentViewSet(
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError({"section": "معرّف الشعبة غير صالح."})
         link = resolve_assessment_section(assessment=assessment, section=section)
+        require_section(request.user, link.section)
         ensure_actor_can_manage_scope(actor=request.user, section=link.section, grade_subject=assessment.grade_subject)
 
         records = get_assessment_score_rows(
@@ -509,6 +553,9 @@ class AssessmentViewSet(
             assessment=assessment,
             section=serializer.validated_data["section"],
         )
+        require_section(request.user, link.section)
+        for record in serializer.validated_data["records"]:
+            require_enrollment(request.user, record["enrollment"])
         ensure_actor_can_manage_scope(
             actor=request.user,
             section=link.section,
@@ -571,6 +618,8 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
+        require_section(request.user, serializer.validated_data["section"])
+
         result = (
             publish_section_assessments(
                 actor=request.user,
@@ -613,6 +662,8 @@ class AssessmentViewSet(
         serializer.is_valid(
             raise_exception=True,
         )
+
+        require_grade_level(request.user, serializer.validated_data["grade_level"])
 
         result = (
             publish_grade_assessments(
@@ -668,6 +719,8 @@ class AssessmentViewSet(
             ]
         )
 
+        require_enrollment(request.user, enrollment)
+
         term = (
             query_serializer
             .validated_data[
@@ -679,6 +732,7 @@ class AssessmentViewSet(
             enrollment=enrollment,
             term=term,
             published_only=False,
+            scope_user=request.user if is_stage_scoped_supervisor(request.user) else None,
         )
 
         user = request.user

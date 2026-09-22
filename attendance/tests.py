@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
-from academics.models import AcademicYear, GradeLevel, Section
+from academics.models import AcademicYear, GradeLevel, Section, SupervisorScope
 from accounts.models import User
 from audit_logs.models import AuditLog
 from notifications.models import Notification
@@ -37,6 +37,10 @@ class AttendanceFixture(TestCase):
             usual_departure_method=None,
         )
         self.supervisor = self.make_user("supervisor", User.Role.SUPERVISOR)
+        SupervisorScope.objects.create(
+            supervisor=self.supervisor,
+            scope_type=SupervisorScope.ScopeType.ALL,
+        )
         self.school_admin = self.make_user("school-admin", User.Role.SCHOOL_ADMIN)
         self.teacher = self.make_user("teacher", User.Role.TEACHER)
         self.secretariat = self.make_user("secretariat", User.Role.SECRETARIAT)

@@ -65,7 +65,7 @@ def get_assessment_score_rows(*, assessment, section):
     return rows
 
 
-def get_student_term_results(*, enrollment, term, published_only=False):
+def get_student_term_results(*, enrollment, term, published_only=False, scope_user=None):
     if enrollment.academic_year_id != term.academic_year_id:
         raise ValidationError({"term": "الفصل الدراسي لا يتبع سنة تسجيل الطالب."})
     own_scores = StudentScore.objects.filter(enrollment=enrollment)
@@ -77,6 +77,13 @@ def get_student_term_results(*, enrollment, term, published_only=False):
         Q(assessment_date__gte=enrollment.enrollment_date)
         | Q(scores__enrollment=enrollment)
     )
+    if scope_user is not None:
+        from academics.supervisor_academic_scope import filter_queryset_by_stage
+        from .supervisor_scope import require_assessment
+
+        assessments = filter_queryset_by_stage(
+            assessments, scope_user, stage_lookup="grade_subject__grade_level__stage"
+        )
     if published_only:
         assessments = assessments.filter(assessment_sections__status=AssessmentSection.Status.PUBLISHED)
     assessments = assessments.select_related("grade_subject__subject").prefetch_related(
@@ -85,6 +92,8 @@ def get_student_term_results(*, enrollment, term, published_only=False):
     ).distinct().order_by("grade_subject__subject__name", "assessment_date", "created_at")
     grouped = {}
     for assessment in assessments:
+        if scope_user is not None:
+            require_assessment(scope_user, assessment)
         subject = assessment.grade_subject
         group = grouped.setdefault(subject.id, {
             "grade_subject": subject.id, "subject": subject.subject_id,

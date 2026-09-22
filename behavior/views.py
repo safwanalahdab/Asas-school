@@ -1,9 +1,14 @@
 from django.db import transaction
 
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.viewsets import ModelViewSet
 
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from academics.supervisor_academic_scope import (
+    can_access_enrollment,
+    filter_queryset_by_stage,
+)
 
 from .models import BehaviorNote
 from .permissions import IsWebClientToken
@@ -68,10 +73,33 @@ class BehaviorNoteViewSet(
         ),
     }
 
+    def get_queryset(self):
+        return filter_queryset_by_stage(
+            super().get_queryset(), self.request.user,
+            stage_lookup="enrollment__section__grade_level__stage",
+        )
+
+    @staticmethod
+    def _require_enrollment_scope(user, enrollment):
+        if not can_access_enrollment(user, enrollment):
+            raise PermissionDenied({
+                "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                "detail": "التسجيل المحدد خارج نطاق مراحل الموجّه.",
+            })
+
     @transaction.atomic
     def perform_create(self, serializer):
+        self._require_enrollment_scope(
+            self.request.user, serializer.validated_data["enrollment"]
+        )
         behavior_note = serializer.save(
             created_by=self.request.user,
         )
         notify_behavior_note_created(behavior_note)
+
+    def perform_update(self, serializer):
+        enrollment = serializer.validated_data.get("enrollment")
+        if enrollment is not None and enrollment.pk != serializer.instance.enrollment_id:
+            self._require_enrollment_scope(self.request.user, enrollment)
+        serializer.save()
 from django.db import transaction

@@ -15,6 +15,7 @@ from teaching.models import TeacherAssignment
 
 from .models import Assessment, AssessmentSection, ScoreAuditLog, StudentScore
 from .selectors import get_enrollment_section_id_on_date
+from .supervisor_scope import require_assessment, require_grade_level, require_section, require_enrollment
 
 User = get_user_model()
 ZERO = Decimal("0")
@@ -87,6 +88,8 @@ def _ensure_not_duplicate(*, sections, grade_subject, term, title, assessment_da
 
 @transaction.atomic
 def create_assessment(*, section, grade_subject, term, title, max_score, assessment_date, actor, allow_duplicate=False):
+    require_grade_level(actor, grade_subject.grade_level)
+    require_section(actor, section)
     validate_assessment_scope(section=section, grade_subject=grade_subject, term=term, assessment_date=assessment_date)
     ensure_actor_can_manage_scope(actor=actor, section=section, grade_subject=grade_subject)
     _validate_definition(title=title, max_score=max_score, term=term, assessment_date=assessment_date)
@@ -101,6 +104,7 @@ def create_assessment(*, section, grade_subject, term, title, max_score, assessm
 
 @transaction.atomic
 def create_assessments_for_grade(*, grade_subject, term, title, max_score, assessment_date, actor, allow_duplicate=False):
+    require_grade_level(actor, grade_subject.grade_level)
     if term.academic_year_id != grade_subject.academic_year_id:
         raise ValidationError({"term": "الفصل الدراسي لا يتبع سنة مادة الصف المحددة."})
     _validate_definition(title=title, max_score=max_score, term=term, assessment_date=assessment_date)
@@ -109,6 +113,8 @@ def create_assessments_for_grade(*, grade_subject, term, title, max_score, asses
     ).order_by("name"))
     if not sections:
         raise ValidationError({"detail": "لا توجد شعب فعالة لهذا الصف."})
+    for section in sections:
+        require_section(actor, section)
     _ensure_not_duplicate(sections=sections, grade_subject=grade_subject, term=term, title=title, assessment_date=assessment_date, allow_duplicate=allow_duplicate)
     assessment = Assessment.objects.create(
         grade_subject=grade_subject, term=term, title=title.strip(), max_score=max_score,
@@ -184,6 +190,10 @@ def _validate_score(*, assessment, section, enrollment, score):
 
 @transaction.atomic
 def save_assessment_scores_bulk(*, assessment, section, records, actor, source=ScoreAuditLog.Source.API):
+    require_assessment(actor, assessment)
+    require_section(actor, section)
+    for record in records:
+        require_enrollment(actor, record["enrollment"])
     assessment = Assessment.objects.select_for_update().select_related("grade_subject").get(pk=assessment.pk)
     link = AssessmentSection.objects.select_for_update().select_related("section").get(assessment=assessment, section=section)
     ensure_actor_can_manage_scope(actor=actor, section=link.section, grade_subject=assessment.grade_subject)
@@ -291,11 +301,16 @@ def _notify_published_assessment_sections(links):
 
 @transaction.atomic
 def publish_section_assessments(*, section, term, actor):
+    require_section(actor, section)
     _ensure_can_publish(actor)
     if section.academic_year_id != term.academic_year_id:
         raise ValidationError({"term": "الفصل الدراسي لا يتبع سنة الشعبة."})
+    for link in AssessmentSection.objects.filter(section=section, assessment__term=term, status=AssessmentSection.Status.DRAFT).select_related("assessment"):
+        require_assessment(actor, link.assessment)
     now, today = timezone.now(), timezone.localdate()
     links = list(AssessmentSection.objects.select_for_update().filter(section=section, assessment__term=term, assessment__assessment_date__lte=today, status=AssessmentSection.Status.DRAFT))
+    for link in links:
+        require_assessment(actor, link.assessment)
     count = AssessmentSection.objects.filter(pk__in=[link.pk for link in links]).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     future = AssessmentSection.objects.filter(section=section, assessment__term=term, assessment__assessment_date__gt=today, status=AssessmentSection.Status.DRAFT).count()
     if count:
@@ -311,11 +326,16 @@ def publish_section_assessments(*, section, term, actor):
 
 @transaction.atomic
 def publish_grade_assessments(*, grade_level, term, actor):
+    require_grade_level(actor, grade_level)
     _ensure_can_publish(actor)
+    for link in AssessmentSection.objects.filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT).select_related("assessment"):
+        require_assessment(actor, link.assessment)
     now, today = timezone.now(), timezone.localdate()
     base = AssessmentSection.objects.select_for_update().filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT)
     future = base.filter(assessment__assessment_date__gt=today).count()
     links = list(base.filter(assessment__assessment_date__lte=today))
+    for link in links:
+        require_assessment(actor, link.assessment)
     count = AssessmentSection.objects.filter(pk__in=[link.pk for link in links]).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     if count:
         record_audit_event(

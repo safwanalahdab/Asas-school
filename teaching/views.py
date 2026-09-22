@@ -7,9 +7,17 @@ from config.api_responses import ArabicApiResponseMixin
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from django.db import transaction
+from django.db.models import F
+from rest_framework.exceptions import PermissionDenied
 
 from accounts.models import User
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from academics.supervisor_academic_scope import (
+    can_access_grade_level,
+    can_access_section,
+    filter_queryset_by_stage,
+    supervisor_academic_scope_for,
+)
 from behavior.permissions import IsWebClientToken
 
 from django_filters.rest_framework import DjangoFilterBackend
@@ -109,10 +117,47 @@ class TeacherAssignmentViewSet(ArabicApiResponseMixin, viewsets.ModelViewSet):
                 teacher=user,
             )
 
+        scope = supervisor_academic_scope_for(user)
+        if scope.applies and not scope.allows_all_stages:
+            queryset = queryset.filter(
+                section__grade_level_id=F("grade_subject__grade_level_id"),
+                section__academic_year_id=F("grade_subject__academic_year_id"),
+            )
+            return filter_queryset_by_stage(
+                queryset, user, stage_lookup="section__grade_level__stage"
+            )
+
         return queryset
+
+    def require_supervisor_assignment_scope(self, serializer):
+        user = self.request.user
+        scope = supervisor_academic_scope_for(user)
+        if not scope.applies or scope.allows_all_stages:
+            return
+
+        instance = serializer.instance
+        section = serializer.validated_data.get(
+            "section", getattr(instance, "section", None)
+        )
+        grade_subject = serializer.validated_data.get(
+            "grade_subject", getattr(instance, "grade_subject", None)
+        )
+        if (
+            section is None
+            or grade_subject is None
+            or section.grade_level_id != grade_subject.grade_level_id
+            or section.academic_year_id != grade_subject.academic_year_id
+            or not can_access_section(user, section)
+            or not can_access_grade_level(user, grade_subject.grade_level)
+        ):
+            raise PermissionDenied({
+                "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                "detail": "التكليف المحدد خارج نطاق مراحل الموجّه أو غير متسق أكاديميًا.",
+            })
 
     @transaction.atomic
     def perform_create(self, serializer):
+        self.require_supervisor_assignment_scope(serializer)
         assignment = serializer.save()
         record_audit_event(
             actor=self.request.user, module=AuditLog.Module.ACADEMICS,
@@ -124,6 +169,7 @@ class TeacherAssignmentViewSet(ArabicApiResponseMixin, viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_update(self, serializer):
+        self.require_supervisor_assignment_scope(serializer)
         fields = ("teacher", "grade_subject", "section", "start_date", "end_date")
         before = {field: str(getattr(serializer.instance, field)) for field in fields}
         assignment = serializer.save()

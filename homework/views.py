@@ -1,10 +1,16 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import F
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
+from academics.supervisor_academic_scope import (
+    can_access_section,
+    filter_queryset_by_stage,
+    is_stage_scoped_supervisor,
+)
 from config.api_responses import ArabicApiResponseMixin
 
 from .models import Homework
@@ -95,7 +101,42 @@ class HomeworkViewSet(
                 teacher_assignment__teacher=user,
             )
 
+        if is_stage_scoped_supervisor(user):
+            queryset = queryset.filter(
+                teacher_assignment__section__grade_level_id=F(
+                    "teacher_assignment__grade_subject__grade_level_id"
+                ),
+                teacher_assignment__section__academic_year_id=F(
+                    "teacher_assignment__grade_subject__academic_year_id"
+                ),
+            )
+            return filter_queryset_by_stage(
+                queryset, user,
+                stage_lookup="teacher_assignment__section__grade_level__stage",
+            )
+
         return queryset
+
+    def validate_supervisor_assignment_scope(self, serializer):
+        user = self.request.user
+        if not is_stage_scoped_supervisor(user):
+            return
+
+        assignment = serializer.validated_data.get("teacher_assignment")
+        if assignment is None:
+            return
+
+        section = assignment.section
+        grade_subject = assignment.grade_subject
+        if (
+            section.grade_level_id != grade_subject.grade_level_id
+            or section.academic_year_id != grade_subject.academic_year_id
+            or not can_access_section(user, section)
+        ):
+            raise PermissionDenied({
+                "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                "detail": "التكليف المحدد خارج نطاق مراحل الموجّه أو غير متسق أكاديميًا.",
+            })
 
     def validate_teacher_assignment_access(self, serializer):
         user = self.request.user
@@ -131,6 +172,7 @@ class HomeworkViewSet(
 
     @transaction.atomic
     def perform_create(self, serializer):
+        self.validate_supervisor_assignment_scope(serializer)
         self.validate_teacher_assignment_access(
             serializer,
         )
@@ -141,6 +183,7 @@ class HomeworkViewSet(
         notify_homework_created(homework)
 
     def perform_update(self, serializer):
+        self.validate_supervisor_assignment_scope(serializer)
         self.validate_teacher_assignment_access(
             serializer,
         )

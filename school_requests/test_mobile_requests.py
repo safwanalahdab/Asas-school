@@ -8,6 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from academics.models import SupervisorScope
 from students.models import GuardianStudent, Student
 
 from .mobile_throttles import MobileSchoolRequestBurstThrottle
@@ -270,6 +271,9 @@ class MobileSchoolRequestTests(TestCase):
         self.assertNotIn("handled_by", self.recursive_keys(data))
 
     def test_supervisor_and_secretariat_can_answer_through_web(self):
+        SupervisorScope.objects.create(
+            supervisor=self.supervisor, scope_type=SupervisorScope.ScopeType.ALL
+        )
         self.answer_with_web_role(self.supervisor)
         self.answer_with_web_role(self.secretariat)
 
