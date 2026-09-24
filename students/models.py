@@ -351,3 +351,174 @@ class StudentAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.get_event_type_display()} - " f"{self.enrollment.student}"
+
+
+class StudentImportJob(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        VALIDATING = "validating", "Validating"
+        VALIDATION_FAILED = "validation_failed", "Validation failed"
+        READY = "ready", "Ready"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        COMPLETED_WITH_ERRORS = "completed_with_errors", "Completed with errors"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="student_import_jobs",
+    )
+    original_filename = models.CharField(max_length=255)
+    file_sha256 = models.CharField(max_length=64)
+    file_size = models.BigIntegerField()
+    status = models.CharField(
+        max_length=25,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    total_rows = models.IntegerField(default=0)
+    valid_rows = models.IntegerField(default=0)
+    invalid_rows = models.IntegerField(default=0)
+    review_rows = models.IntegerField(default=0)
+    processed_rows = models.IntegerField(default=0)
+    succeeded_rows = models.IntegerField(default=0)
+    failed_rows = models.IntegerField(default=0)
+    batch_size = models.PositiveSmallIntegerField(default=100)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "students_import_job"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(file_size__gte=0),
+                name="students_imp_job_file_size_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(total_rows__gte=0),
+                name="students_imp_job_total_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(valid_rows__gte=0),
+                name="students_imp_job_valid_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(invalid_rows__gte=0),
+                name="students_imp_job_invalid_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(review_rows__gte=0),
+                name="students_imp_job_review_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(processed_rows__gte=0),
+                name="students_imp_job_processed_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(succeeded_rows__gte=0),
+                name="students_imp_job_succeeded_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(failed_rows__gte=0),
+                name="students_imp_job_failed_nonnegative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(batch_size__gte=1, batch_size__lte=100),
+                name="students_imp_job_batch_size_range",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.original_filename} - {self.get_status_display()}"
+
+
+class StudentImportRow(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        READY = "ready", "Ready"
+        REVIEW_REQUIRED = "review_required", "Review required"
+        INVALID = "invalid", "Invalid"
+        PROCESSING = "processing", "Processing"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False,
+    )
+    job = models.ForeignKey(
+        StudentImportJob,
+        on_delete=models.CASCADE,
+        related_name="rows",
+    )
+    row_number = models.IntegerField()
+    normalized_data = models.JSONField(default=dict)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    validation_errors = models.JSONField(default=list)
+    student = models.ForeignKey(
+        Student,
+        on_delete=models.PROTECT,
+        related_name="import_rows",
+        null=True,
+        blank=True,
+    )
+    guardian = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="student_import_rows",
+        null=True,
+        blank=True,
+    )
+    enrollment = models.ForeignKey(
+        Enrollment,
+        on_delete=models.PROTECT,
+        related_name="import_rows",
+        null=True,
+        blank=True,
+    )
+    attempt_count = models.IntegerField(default=0)
+    lease_token = models.UUIDField(null=True, blank=True, editable=False)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    last_attempt_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "students_import_row"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job", "row_number"],
+                name="students_imp_row_unique_job_row",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(row_number__gte=1),
+                name="students_imp_row_number_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(attempt_count__gte=0),
+                name="students_imp_row_attempts_nonnegative",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["job", "status", "row_number"],
+                name="stud_imp_job_status_row_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.job_id} - row {self.row_number}"
