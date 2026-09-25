@@ -9,6 +9,7 @@ from .views import (
     StudentViewSet,
 )
 from .profile_views import StudentProfileView
+from .student_import_api import StudentImportUploadView
 
 
 router = DefaultRouter()
@@ -33,6 +34,7 @@ router.register(
 
 
 urlpatterns = [
+    path("imports/", StudentImportUploadView.as_view(), name="student-import-upload"),
     path("register/", StudentRegistrationView.as_view(), name="student-register"),
     path(
         "<uuid:student_id>/profile/",
