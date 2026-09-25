@@ -1,5 +1,6 @@
 from drf_spectacular.utils import extend_schema
-from rest_framework import serializers, status
+from django.shortcuts import get_object_or_404
+from rest_framework import generics, serializers, status
 from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
@@ -11,7 +12,7 @@ from accounts.permissions import PasswordChangeGate
 from behavior.permissions import IsWebClientToken
 from config.api_responses import ArabicApiResponseMixin
 
-from .models import StudentImportJob
+from .models import StudentImportJob, StudentImportRow
 from .student_import_job_service import create_student_import_job
 
 
@@ -47,6 +48,25 @@ class StudentImportJobSummarySerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = fields
+
+
+class StudentImportRowSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentImportRow
+        fields = (
+            "id",
+            "row_number",
+            "status",
+            "validation_errors",
+        )
+        read_only_fields = fields
+
+
+class StudentImportRowFilterSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(
+        choices=StudentImportRow.Status.choices,
+        required=False,
+    )
 
 
 class CanUploadStudentImport(BasePermission):
@@ -115,3 +135,63 @@ class StudentImportUploadView(ArabicApiResponseMixin, APIView):
             response_serializer.data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class StudentImportJobDetailView(
+    ArabicApiResponseMixin,
+    generics.RetrieveAPIView,
+):
+    queryset = StudentImportJob.objects.all()
+    serializer_class = StudentImportJobSummarySerializer
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        IsWebClientToken,
+        CanUploadStudentImport,
+    ]
+    lookup_url_kwarg = "job_id"
+    response_messages = {
+        "get": (
+            "STUDENT_IMPORT_RETRIEVED",
+            "تم جلب ملخص استيراد الطلاب بنجاح.",
+        ),
+    }
+
+
+class StudentImportJobRowsView(
+    ArabicApiResponseMixin,
+    generics.ListAPIView,
+):
+    serializer_class = StudentImportRowSummarySerializer
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        IsWebClientToken,
+        CanUploadStudentImport,
+    ]
+    response_messages = {
+        "get": (
+            "STUDENT_IMPORT_ROWS_RETRIEVED",
+            "تم جلب صفوف استيراد الطلاب بنجاح.",
+        ),
+    }
+
+    @extend_schema(parameters=[StudentImportRowFilterSerializer])
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        job = get_object_or_404(
+            StudentImportJob.objects.all(),
+            pk=self.kwargs["job_id"],
+        )
+        filter_serializer = StudentImportRowFilterSerializer(
+            data=self.request.query_params,
+        )
+        filter_serializer.is_valid(raise_exception=True)
+
+        queryset = job.rows.order_by("row_number")
+        row_status = filter_serializer.validated_data.get("status")
+        if row_status:
+            queryset = queryset.filter(status=row_status)
+        return queryset
