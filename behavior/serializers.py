@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import BehaviorNote
+from .models import BehaviorNote, StudentPointEntry
 
 
 class BehaviorNoteSerializer(serializers.ModelSerializer):
@@ -38,4 +38,43 @@ class BehaviorNoteSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         )
+
+
+class StudentPointEntrySerializer(serializers.ModelSerializer):
+    student = serializers.SerializerMethodField()
+    created_by_username = serializers.CharField(
+        source="created_by.username",
+        read_only=True,
+    )
+
+    class Meta:
+        model = StudentPointEntry
+        fields = (
+            "id",
+            "enrollment",
+            "student",
+            "points",
+            "note",
+            "occurred_on",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "student",
+            "created_by",
+            "created_by_username",
+            "created_at",
+            "updated_at",
+        )
+
+    @staticmethod
+    def get_student(obj):
+        student = obj.enrollment.student
+        return {
+            "id": student.pk,
+            "full_name": student.full_name,
+        }
 

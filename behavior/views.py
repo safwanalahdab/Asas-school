@@ -10,9 +10,10 @@ from academics.supervisor_academic_scope import (
     filter_queryset_by_stage,
 )
 
-from .models import BehaviorNote
+from .filters import StudentPointEntryFilter
+from .models import BehaviorNote, StudentPointEntry
 from .permissions import IsWebClientToken
-from .serializers import BehaviorNoteSerializer
+from .serializers import BehaviorNoteSerializer, StudentPointEntrySerializer
 from .services import notify_behavior_note_created
 from config.api_responses import ArabicApiResponseMixin
 
@@ -102,4 +103,100 @@ class BehaviorNoteViewSet(
         if enrollment is not None and enrollment.pk != serializer.instance.enrollment_id:
             self._require_enrollment_scope(self.request.user, enrollment)
         serializer.save()
-from django.db import transaction
+
+
+class StudentPointEntryViewSet(
+    ArabicApiResponseMixin,
+    ModelViewSet,
+):
+    queryset = StudentPointEntry.objects.select_related(
+        "enrollment",
+        "enrollment__student",
+        "enrollment__academic_year",
+        "enrollment__section",
+        "enrollment__section__grade_level",
+        "created_by",
+    )
+    serializer_class = StudentPointEntrySerializer
+    filterset_class = StudentPointEntryFilter
+    search_fields = [
+        "enrollment__student__first_name",
+        "enrollment__student__last_name",
+        "note",
+    ]
+    ordering_fields = [
+        "occurred_on",
+        "created_at",
+        "points",
+    ]
+    action_permissions = {
+        "list": "behavior.view_studentpointentry",
+        "retrieve": "behavior.view_studentpointentry",
+        "create": "behavior.add_studentpointentry",
+        "partial_update": "behavior.change_studentpointentry",
+        "destroy": "behavior.delete_studentpointentry",
+    }
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        IsWebClientToken,
+        ActionBusinessPermission,
+    ]
+    http_method_names = [
+        "get",
+        "post",
+        "patch",
+        "head",
+        "options",
+        "delete",
+    ]
+    response_messages = {
+        "list": (
+            "STUDENT_POINTS_RETRIEVED",
+            "تم جلب نقاط الطلاب بنجاح.",
+        ),
+        "retrieve": (
+            "STUDENT_POINT_RETRIEVED",
+            "تم جلب سجل النقاط بنجاح.",
+        ),
+        "create": (
+            "STUDENT_POINT_CREATED",
+            "تمت إضافة نقاط الطالب بنجاح.",
+        ),
+        "partial_update": (
+            "STUDENT_POINT_UPDATED",
+            "تم تحديث سجل النقاط بنجاح.",
+        ),
+        "destroy": (
+            "STUDENT_POINT_DELETED",
+            "تم حذف سجل النقاط بنجاح.",
+        ),
+    }
+
+    def get_queryset(self):
+        return filter_queryset_by_stage(
+            super().get_queryset(),
+            self.request.user,
+            stage_lookup="enrollment__section__grade_level__stage",
+        )
+
+    @staticmethod
+    def _require_enrollment_scope(user, enrollment):
+        if not can_access_enrollment(user, enrollment):
+            raise PermissionDenied({
+                "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                "detail": "التسجيل المحدد خارج نطاق مراحل الموجّه.",
+            })
+
+    def perform_create(self, serializer):
+        self._require_enrollment_scope(
+            self.request.user,
+            serializer.validated_data["enrollment"],
+        )
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        enrollment = serializer.validated_data.get("enrollment")
+        if enrollment is not None and enrollment.pk != serializer.instance.enrollment_id:
+            self._require_enrollment_scope(self.request.user, enrollment)
+        serializer.save()
