@@ -432,7 +432,19 @@ class ChangePasswordSerializer(serializers.Serializer):
         return user
 
 
-class UserCreateSerializer(serializers.ModelSerializer):
+class OptionalNationalIdSerializerMixin:
+    def to_internal_value(self, data):
+        if (
+            "national_id" in data
+            and isinstance(data.get("national_id"), str)
+            and not data.get("national_id").strip()
+        ):
+            data = data.copy()
+            data["national_id"] = None
+        return super().to_internal_value(data)
+
+
+class UserCreateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelSerializer):
     temporary_password = serializers.CharField(read_only=True)
     supervisor_scope = SupervisorScopeField(required=False)
     forbidden_fields = {
@@ -449,6 +461,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "username",
+            "national_id",
+            "phone_number",
             "email",
             "first_name",
             "last_name",
@@ -633,7 +647,7 @@ class WebMeUpdateSerializer(serializers.ModelSerializer):
         return value
 
 
-class UserUpdateSerializer(serializers.ModelSerializer):
+class UserUpdateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelSerializer):
     supervisor_scope = SupervisorScopeField(required=False)
     forbidden_fields = {
         "password",
@@ -649,6 +663,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "username",
+            "national_id",
+            "phone_number",
             "email",
             "first_name",
             "last_name",
