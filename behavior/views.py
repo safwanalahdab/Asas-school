@@ -14,7 +14,10 @@ from .filters import StudentPointEntryFilter
 from .models import BehaviorNote, StudentPointEntry
 from .permissions import IsWebClientToken
 from .serializers import BehaviorNoteSerializer, StudentPointEntrySerializer
-from .services import notify_behavior_note_created
+from .services import (
+    notify_behavior_note_created,
+    notify_student_point_entry_created,
+)
 from config.api_responses import ArabicApiResponseMixin
 
 
@@ -188,12 +191,14 @@ class StudentPointEntryViewSet(
                 "detail": "التسجيل المحدد خارج نطاق مراحل الموجّه.",
             })
 
+    @transaction.atomic
     def perform_create(self, serializer):
         self._require_enrollment_scope(
             self.request.user,
             serializer.validated_data["enrollment"],
         )
-        serializer.save(created_by=self.request.user)
+        point_entry = serializer.save(created_by=self.request.user)
+        notify_student_point_entry_created(point_entry)
 
     def perform_update(self, serializer):
         enrollment = serializer.validated_data.get("enrollment")
