@@ -162,6 +162,7 @@ class WebFinancePermissionTests(TestCase):
         self.login(self.teacher)
         self.grant(self.teacher, "finance.add_payment")
         self.grant(self.teacher, "finance.view_studentfinancialaccount")
+        self.grant(self.teacher, "finance.view_payment")
 
         response = self.client.post(
             detail_url + "payments/",
@@ -182,6 +183,122 @@ class WebFinancePermissionTests(TestCase):
         detail = self.client.get(detail_url)
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.data["data"]["payments"][0]["note"], "دفعة شهر أيلول")
+
+    def create_detail_records(self):
+        discount = StudentDiscount.objects.create(
+            account=self.other,
+            discount_type=StudentDiscount.DiscountType.PERCENTAGE,
+            value=Decimal("10.00"),
+            created_by=self.admin,
+        )
+        payment = Payment.objects.create(
+            account=self.other,
+            currency="usd",
+            amount=Decimal("100.00"),
+            equivalent_usd=Decimal("100.00"),
+            recorded_by=self.admin,
+        )
+        return discount, payment
+
+    def account_detail(self):
+        return self.client.get(f"/api/v1/finance/accounts/{self.other.pk}/")
+
+    def test_account_permission_without_discount_permission_hides_discounts(self):
+        self.create_detail_records()
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+
+        response = self.account_detail()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("discounts", response.data["data"])
+
+    def test_account_permission_without_payment_permission_hides_payments(self):
+        self.create_detail_records()
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+
+        response = self.account_detail()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("payments", response.data["data"])
+
+    def test_discount_permission_exposes_only_discount_details(self):
+        discount, _payment = self.create_detail_records()
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+        self.grant(self.teacher, "finance.view_studentdiscount")
+
+        response = self.account_detail()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.data["data"]["discounts"]],
+            [str(discount.pk)],
+        )
+        self.assertNotIn("payments", response.data["data"])
+
+    def test_payment_permission_exposes_only_payment_details(self):
+        _discount, payment = self.create_detail_records()
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+        self.grant(self.teacher, "finance.view_payment")
+
+        response = self.account_detail()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.data["data"]["payments"]],
+            [str(payment.pk)],
+        )
+        self.assertNotIn("discounts", response.data["data"])
+
+    def test_all_view_permissions_expose_complete_financial_details(self):
+        discount, payment = self.create_detail_records()
+        self.login(self.teacher)
+        for code in (
+            "finance.view_studentfinancialaccount",
+            "finance.view_studentdiscount",
+            "finance.view_payment",
+        ):
+            self.grant(self.teacher, code)
+
+        response = self.account_detail()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [item["id"] for item in response.data["data"]["discounts"]],
+            [str(discount.pk)],
+        )
+        self.assertEqual(
+            [item["id"] for item in response.data["data"]["payments"]],
+            [str(payment.pk)],
+        )
+
+    def test_detail_field_permissions_do_not_change_account_access(self):
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.view_studentdiscount")
+        self.grant(self.teacher, "finance.view_payment")
+        self.assertEqual(self.account_detail().status_code, 403)
+
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+        self.assertEqual(self.account_detail().status_code, 200)
+
+    def test_financial_totals_are_unchanged_when_detail_fields_are_hidden(self):
+        self.create_detail_records()
+        self.login(self.teacher)
+        self.grant(self.teacher, "finance.view_studentfinancialaccount")
+        restricted = self.account_detail()
+        restricted_totals = restricted.data["data"]["totals"]
+        self.assertNotIn("discounts", restricted.data["data"])
+        self.assertNotIn("payments", restricted.data["data"])
+
+        self.grant(self.teacher, "finance.view_studentdiscount")
+        self.grant(self.teacher, "finance.view_payment")
+        complete = self.account_detail()
+
+        self.assertEqual(complete.status_code, 200)
+        self.assertEqual(complete.data["data"]["totals"], restricted_totals)
 
     def test_payment_note_defaults_and_whitespace_are_empty(self):
         detail_url = f"/api/v1/finance/accounts/{self.other.pk}/"

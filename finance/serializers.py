@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from accounts.permissions import has_direct_permission
+
 from .models import (
     GradeTuitionPlan,
     MoneyCurrency,
@@ -394,6 +396,18 @@ class StudentFinancialAccountDetailSerializer(
             "created_by_username",
             "updated_at",
         )
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+
+        if not has_direct_permission(user, "finance.view_studentdiscount"):
+            data.pop("discounts", None)
+        if not has_direct_permission(user, "finance.view_payment"):
+            data.pop("payments", None)
+
+        return data
 
 
 class AddDiscountSerializer(
