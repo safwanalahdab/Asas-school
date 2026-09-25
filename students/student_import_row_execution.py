@@ -85,22 +85,12 @@ def _revalidate(import_row):
     return result_row
 
 
-@transaction.atomic
-def execute_student_import_row(*, import_row, actor):
-    persisted_row = StudentImportRow.objects.select_related("job").get(
-        pk=import_row.pk
-    )
-    if persisted_row.status != StudentImportRow.Status.READY:
-        _raise_not_ready(
-            "row_not_ready",
-            "لا يمكن تنفيذ صف استيراد غير جاهز.",
-        )
-    if persisted_row.job.status != StudentImportJob.Status.READY:
-        _raise_not_ready(
-            "job_not_ready",
-            "لا يمكن تنفيذ صف من جلسة استيراد غير جاهزة.",
-        )
+def _create_student_for_import_row(*, persisted_row, actor):
+    """Create every record for a pre-locked import row.
 
+    The caller owns the transaction.  This lets the batch coordinator commit the
+    created records and the terminal import-row state as one database unit.
+    """
     validated_row = _revalidate(persisted_row)
     references = validated_row.resolved_references
     if not (
@@ -186,4 +176,28 @@ def execute_student_import_row(*, import_row, actor):
         guardian_created=guardian_created,
         enrollment=enrollment,
         financial_account=financial_account,
+    )
+
+
+@transaction.atomic
+def execute_student_import_row(*, import_row, actor):
+    persisted_row = (
+        StudentImportRow.objects.select_for_update()
+        .select_related("job")
+        .get(pk=import_row.pk)
+    )
+    if persisted_row.status != StudentImportRow.Status.READY:
+        _raise_not_ready(
+            "row_not_ready",
+            "لا يمكن تنفيذ صف استيراد غير جاهز.",
+        )
+    if persisted_row.job.status != StudentImportJob.Status.READY:
+        _raise_not_ready(
+            "job_not_ready",
+            "لا يمكن تنفيذ صف من جلسة استيراد غير جاهزة.",
+        )
+
+    return _create_student_for_import_row(
+        persisted_row=persisted_row,
+        actor=actor,
     )
