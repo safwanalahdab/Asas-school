@@ -57,6 +57,10 @@ urlpatterns = [
         include("behavior.mobile_urls"),
     ),
     path(
+        "children/<uuid:student_id>/points/",
+        include("behavior.mobile_point_urls"),
+    ),
+    path(
         "children/<uuid:student_id>/finance/",
         include("finance.mobile_urls"),
     ),

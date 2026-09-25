@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import BehaviorNote
+from .models import BehaviorNote, StudentPointEntry
 
 
 class MobileBehaviorStudentSerializer(serializers.Serializer):
@@ -75,3 +75,71 @@ class MobileBehaviorErrorSerializer(serializers.Serializer):
     message = serializers.CharField()
     errors = serializers.JSONField(required=False)
     meta = MobileBehaviorMetaSerializer()
+
+
+class MobilePointsQuerySerializer(serializers.Serializer):
+    date_from = serializers.DateField(required=False)
+    date_to = serializers.DateField(required=False)
+
+    def validate(self, attrs):
+        if (
+            attrs.get("date_from")
+            and attrs.get("date_to")
+            and attrs["date_from"] > attrs["date_to"]
+        ):
+            raise serializers.ValidationError({
+                "date_to": "يجب أن يكون تاريخ النهاية مساويًا لتاريخ البداية أو بعده."
+            })
+        return attrs
+
+
+class MobilePointEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentPointEntry
+        fields = (
+            "id",
+            "points",
+            "note",
+            "occurred_on",
+        )
+        read_only_fields = fields
+
+
+class MobilePointsSummarySerializer(serializers.Serializer):
+    total_points = serializers.IntegerField()
+    entries_count = serializers.IntegerField()
+
+
+class MobilePointsDataSerializer(serializers.Serializer):
+    summary = MobilePointsSummarySerializer()
+    entries = MobilePointEntrySerializer(many=True)
+
+
+class MobilePointsPaginationSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    page = serializers.IntegerField()
+    page_size = serializers.IntegerField()
+    total_pages = serializers.IntegerField()
+
+
+class MobilePointsMetaSerializer(serializers.Serializer):
+    requester_role = MobileBehaviorRequesterRoleSerializer(allow_null=True)
+    pagination = MobilePointsPaginationSerializer(required=False)
+
+
+class MobilePointsResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField(default=True)
+    code = serializers.CharField(default="MOBILE_CHILD_POINTS_RETRIEVED")
+    message = serializers.CharField()
+    data = MobilePointsDataSerializer()
+    meta = MobilePointsMetaSerializer()
+
+
+class MobilePointsErrorSerializer(serializers.Serializer):
+    success = serializers.BooleanField(default=False)
+    code = serializers.CharField()
+    message = serializers.CharField()
+    errors = serializers.JSONField(required=False)
+    meta = MobilePointsMetaSerializer()

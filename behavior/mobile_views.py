@@ -10,13 +10,21 @@ from config.api_responses import ArabicApiResponseMixin
 from config.pagination import StandardPageNumberPagination
 from students.mobile_selectors import get_guardian_child_or_404
 
-from .mobile_selectors import get_mobile_behavior_notes
+from .mobile_selectors import (
+    get_mobile_behavior_notes,
+    get_mobile_point_entries,
+    get_mobile_points_summary,
+)
 from .mobile_serializers import (
     MobileBehaviorDataSerializer,
     MobileBehaviorErrorSerializer,
     MobileBehaviorResponseSerializer,
+    MobilePointsDataSerializer,
+    MobilePointsErrorSerializer,
+    MobilePointsQuerySerializer,
+    MobilePointsResponseSerializer,
 )
-from .models import BehaviorNote
+from .models import BehaviorNote, StudentPointEntry
 
 
 class MobileChildBehaviorView(ArabicApiResponseMixin, APIView):
@@ -93,6 +101,82 @@ class MobileChildBehaviorView(ArabicApiResponseMixin, APIView):
         return Response({
             "code": "MOBILE_CHILD_BEHAVIOR_RETRIEVED",
             "detail": "تم جلب الملاحظات السلوكية للطالب بنجاح.",
+            "data": data,
+            "meta": {
+                "pagination": paginator.get_pagination_meta(request),
+            },
+        })
+
+
+class MobileChildPointsView(ArabicApiResponseMixin, APIView):
+    authentication_classes = [MobileJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsMobileGuardian]
+    http_method_names = ["get", "head", "options"]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "student_id",
+                type={"type": "string", "format": "uuid"},
+                location=OpenApiParameter.PATH,
+            ),
+            OpenApiParameter(
+                "date_from",
+                type={"type": "string", "format": "date"},
+                location=OpenApiParameter.QUERY,
+            ),
+            OpenApiParameter(
+                "date_to",
+                type={"type": "string", "format": "date"},
+                location=OpenApiParameter.QUERY,
+            ),
+            OpenApiParameter("page", type=int, location=OpenApiParameter.QUERY),
+            OpenApiParameter(
+                "page_size",
+                type=int,
+                location=OpenApiParameter.QUERY,
+                description="عدد النتائج في الصفحة (الحد الأقصى 50).",
+            ),
+        ],
+        responses={
+            200: MobilePointsResponseSerializer,
+            400: MobilePointsErrorSerializer,
+            401: MobilePointsErrorSerializer,
+            403: MobilePointsErrorSerializer,
+            404: MobilePointsErrorSerializer,
+        },
+        description="واجهة قراءة فقط تعرض نقاط الطالب في السنة الدراسية الفعالة.",
+    )
+    def get(self, request, student_id):
+        student = get_guardian_child_or_404(
+            guardian=request.user,
+            student_id=student_id,
+        )
+        query = MobilePointsQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        filters = query.validated_data
+
+        enrollments = getattr(student, "mobile_current_enrollments", [])
+        enrollment = enrollments[0] if enrollments else None
+        if enrollment is None:
+            entries_queryset = StudentPointEntry.objects.none()
+        else:
+            entries_queryset = get_mobile_point_entries(
+                enrollment=enrollment,
+                date_from=filters.get("date_from"),
+                date_to=filters.get("date_to"),
+            )
+
+        summary = get_mobile_points_summary(queryset=entries_queryset)
+        paginator = StandardPageNumberPagination()
+        page = paginator.paginate_queryset(entries_queryset, request, view=self)
+        data = MobilePointsDataSerializer({
+            "summary": summary,
+            "entries": page,
+        }).data
+        return Response({
+            "code": "MOBILE_CHILD_POINTS_RETRIEVED",
+            "detail": "تم جلب نقاط الطالب بنجاح.",
             "data": data,
             "meta": {
                 "pagination": paginator.get_pagination_meta(request),
