@@ -1,12 +1,12 @@
 from decimal import Decimal
 from uuid import UUID
 
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Count, OuterRef, Q, Subquery, Sum
 from rest_framework.exceptions import NotFound, ValidationError
 
 from academics.models import AcademicYear
 from attendance.models import AttendanceRecord
-from behavior.models import BehaviorNote
+from behavior.models import BehaviorNote, StudentPointEntry
 from finance.models import StudentFinancialAccount
 from grades.models import AssessmentSection, StudentScore
 
@@ -186,6 +186,27 @@ def empty_behavior_summary():
         "total_notes_count": 0,
         "positive_notes_count": 0,
         "negative_notes_count": 0,
+    }
+
+
+def get_points_summary(enrollment):
+    if enrollment is None:
+        return empty_points_summary()
+
+    summary = StudentPointEntry.objects.filter(
+        enrollment=enrollment,
+    ).aggregate(
+        total_points=Sum("points"),
+        entries_count=Count("id"),
+    )
+    summary["total_points"] = summary["total_points"] or 0
+    return summary
+
+
+def empty_points_summary():
+    return {
+        "total_points": 0,
+        "entries_count": 0,
     }
 
 

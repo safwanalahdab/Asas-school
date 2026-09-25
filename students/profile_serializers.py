@@ -314,6 +314,11 @@ class BehaviorSummarySerializer(serializers.Serializer):
     negative_notes_count = serializers.IntegerField(read_only=True)
 
 
+class PointsSummarySerializer(serializers.Serializer):
+    total_points = serializers.IntegerField(read_only=True)
+    entries_count = serializers.IntegerField(read_only=True)
+
+
 class FinanceSummarySerializer(serializers.Serializer):
     base_tuition_usd = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     total_discounts_usd = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
@@ -332,6 +337,10 @@ class ProfileBehaviorSerializer(serializers.Serializer):
     notes = ProfilePageSerializer(read_only=True)
 
 
+class ProfilePointsSerializer(serializers.Serializer):
+    summary = PointsSummarySerializer(read_only=True)
+
+
 class ProfileFinanceSerializer(serializers.Serializer):
     account = ProfileFinancialAccountSerializer(read_only=True, allow_null=True)
     summary = FinanceSummarySerializer(read_only=True, allow_null=True)
@@ -348,6 +357,7 @@ class StudentProfileSerializer(serializers.Serializer):
     attendance = ProfileAttendanceSerializer(read_only=True)
     grades = ProfilePageSerializer(read_only=True)
     behavior = ProfileBehaviorSerializer(read_only=True)
+    points = ProfilePointsSerializer(read_only=True)
     finance = ProfileFinanceSerializer(read_only=True)
 
 

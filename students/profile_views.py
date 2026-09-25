@@ -23,6 +23,7 @@ from .profile_selectors import (
     get_profile_enrollment,
     get_profile_guardians,
     get_profile_health,
+    get_points_summary,
     get_profile_student,
 )
 from .profile_serializers import (
@@ -131,6 +132,7 @@ class StudentProfileView(ArabicApiResponseMixin, APIView):
         attendance_records, attendance_summary = get_attendance_data(enrollment)
         grade_records = get_grade_records(enrollment)
         behavior_notes, behavior_summary = get_behavior_data(enrollment)
+        points_summary = get_points_summary(enrollment)
         financial_account = get_financial_account(enrollment)
 
         attendance_page = paginate_profile_queryset(
@@ -177,6 +179,9 @@ class StudentProfileView(ArabicApiResponseMixin, APIView):
                 "notes": _serialized_page(
                     behavior_page, ProfileBehaviorNoteSerializer
                 ),
+            },
+            "points": {
+                "summary": points_summary,
             },
             "finance": {
                 "account": financial_account,
