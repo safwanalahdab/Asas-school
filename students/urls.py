@@ -12,6 +12,7 @@ from .profile_views import StudentProfileView
 from .student_import_api import (
     StudentImportJobDetailView,
     StudentImportJobRowsView,
+    StudentImportProcessView,
     StudentImportUploadView,
 )
 
@@ -48,6 +49,11 @@ urlpatterns = [
         "imports/<uuid:job_id>/rows/",
         StudentImportJobRowsView.as_view(),
         name="student-import-rows",
+    ),
+    path(
+        "imports/<uuid:job_id>/process/",
+        StudentImportProcessView.as_view(),
+        name="student-import-process",
     ),
     path("register/", StudentRegistrationView.as_view(), name="student-register"),
     path(

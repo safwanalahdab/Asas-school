@@ -1,4 +1,4 @@
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, extend_schema_field
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, serializers, status
 from rest_framework.parsers import MultiPartParser
@@ -13,6 +13,10 @@ from behavior.permissions import IsWebClientToken
 from config.api_responses import ArabicApiResponseMixin
 
 from .models import StudentImportJob, StudentImportRow
+from .student_import_batch_service import (
+    StudentImportBatchError,
+    process_next_batch,
+)
 from .student_import_job_service import create_student_import_job
 
 
@@ -67,6 +71,35 @@ class StudentImportRowFilterSerializer(serializers.Serializer):
         choices=StudentImportRow.Status.choices,
         required=False,
     )
+
+
+class StudentImportBatchSummarySerializer(serializers.Serializer):
+    claimed_rows = serializers.IntegerField(read_only=True)
+    succeeded_rows = serializers.IntegerField(read_only=True)
+    failed_rows = serializers.IntegerField(read_only=True)
+
+
+class StudentImportProcessResponseSerializer(StudentImportJobSummarySerializer):
+    batch = serializers.SerializerMethodField()
+
+    class Meta(StudentImportJobSummarySerializer.Meta):
+        fields = (*StudentImportJobSummarySerializer.Meta.fields, "batch")
+        read_only_fields = fields
+
+    @extend_schema_field(StudentImportBatchSummarySerializer)
+    def get_batch(self, obj):
+        result = self.context["batch_result"]
+        return {
+            "claimed_rows": result.claimed_rows,
+            "succeeded_rows": sum(
+                row.status == StudentImportRow.Status.SUCCEEDED
+                for row in result.rows
+            ),
+            "failed_rows": sum(
+                row.status == StudentImportRow.Status.FAILED
+                for row in result.rows
+            ),
+        }
 
 
 class CanUploadStudentImport(BasePermission):
@@ -195,3 +228,41 @@ class StudentImportJobRowsView(
         if row_status:
             queryset = queryset.filter(status=row_status)
         return queryset
+
+
+class StudentImportProcessView(ArabicApiResponseMixin, APIView):
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        IsWebClientToken,
+        CanUploadStudentImport,
+    ]
+    http_method_names = ["post", "head", "options"]
+    response_messages = {
+        "post": (
+            "STUDENT_IMPORT_BATCH_PROCESSED",
+            "تمت معالجة الدفعة التالية من استيراد الطلاب.",
+        ),
+    }
+
+    @extend_schema(
+        request=None,
+        responses={status.HTTP_200_OK: StudentImportProcessResponseSerializer},
+    )
+    def post(self, request, job_id):
+        job = get_object_or_404(StudentImportJob.objects.all(), pk=job_id)
+        try:
+            result = process_next_batch(job=job, actor=request.user)
+        except StudentImportBatchError as error:
+            raise ValidationError(
+                {
+                    "code": error.code,
+                    "detail": error.detail,
+                }
+            ) from error
+
+        response_serializer = StudentImportProcessResponseSerializer(
+            result.job,
+            context={"batch_result": result},
+        )
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
