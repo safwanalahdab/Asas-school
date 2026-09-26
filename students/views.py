@@ -630,14 +630,25 @@ class EnrollmentViewSet(
 
     def destroy(self, request, *args, **kwargs):
         enrollment = self.get_object()
+        blocked_detail = (
+            "لا يمكن حذف التسجيل لوجود بيانات أو سجلات تاريخية مرتبطة به."
+        )
         if enrollment.audit_logs.exists():
             raise ValidationError(
                 {
                     "code": "ENROLLMENT_DELETE_BLOCKED",
-                    "detail": "لا يمكن حذف التسجيل لأنه أصبح جزءًا من سجل انتقالات الطالب.",
+                    "detail": blocked_detail,
                 }
             )
-        return super().destroy(request, *args, **kwargs)
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError as exc:
+            raise ValidationError(
+                {
+                    "code": "ENROLLMENT_DELETE_BLOCKED",
+                    "detail": blocked_detail,
+                }
+            ) from exc
 
     def get_serializer_class(self):
         if self.action == "transfer":
