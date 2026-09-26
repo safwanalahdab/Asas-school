@@ -399,6 +399,26 @@ class SupervisorTeacherAccountScopeTests(TestCase):
                 404,
             )
 
+    def test_selected_scope_teacher_role_filter_preserves_visibility_rules(self):
+        response = self.client.get(
+            self.users_url,
+            {"role": User.Role.TEACHER},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        usernames = {
+            item["username"]
+            for item in response.data["data"]["results"]
+        }
+        self.assertEqual(
+            usernames,
+            {
+                self.teacher_a.username,
+                self.teacher_b.username,
+            },
+        )
+        self.assertNotIn(self.guardian.username, usernames)
+
     def test_selected_scope_reset_and_stricter_set_active(self):
         for teacher in (self.teacher_a, self.teacher_b):
             self.assertEqual(
