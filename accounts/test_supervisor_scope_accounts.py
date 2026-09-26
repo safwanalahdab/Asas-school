@@ -491,6 +491,54 @@ class SupervisorTeacherAccountScopeTests(TestCase):
         self.assertEqual(self.client.get(f"{self.users_url}{teacher_id}/").status_code, 200)
         self.assertIn(teacher.username, self.listed_usernames())
 
+    def test_selected_supervisor_can_update_created_guardian_basic_fields(self):
+        created = self.client.post(
+            self.users_url,
+            {
+                "username": "supervisor-created-guardian",
+                "role": User.Role.GUARDIAN,
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+        guardian = User.objects.get(pk=created.data["data"]["id"])
+        self.assertEqual(guardian.created_by, self.supervisor)
+
+        updated = self.client.patch(
+            self.detail(guardian),
+            {
+                "first_name": "Guardian Updated",
+                "phone_number": "0991000001",
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, 200)
+        guardian.refresh_from_db()
+        self.assertEqual(guardian.first_name, "Guardian Updated")
+        self.assertEqual(guardian.phone_number, "0991000001")
+
+    def test_selected_supervisor_can_update_owned_unassigned_teacher_basic_fields(self):
+        teacher = self.create_supervisor_teacher(
+            "supervisor-created-unassigned-teacher"
+        )
+        self.assertEqual(teacher.created_by, self.supervisor)
+        self.assertFalse(teacher.teaching_assignments.exists())
+
+        updated = self.client.patch(
+            self.detail(teacher),
+            {
+                "first_name": "Teacher Updated",
+                "phone_number": "0991000002",
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, 200)
+        teacher.refresh_from_db()
+        self.assertEqual(teacher.first_name, "Teacher Updated")
+        self.assertEqual(teacher.phone_number, "0991000002")
+
     def create_supervisor_teacher(self, username):
         response = self.client.post(
             self.users_url,
