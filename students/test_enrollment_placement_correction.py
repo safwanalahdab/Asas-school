@@ -1,6 +1,7 @@
 from datetime import date
 
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -16,7 +17,12 @@ from academics.models import (
 )
 from attendance.models import AttendanceRecord, AttendanceSheet
 from behavior.models import BehaviorNote, StudentPointEntry
-from finance.models import GradeTuitionPlan, StudentFinancialAccount
+from finance.models import (
+    GradeTuitionPlan,
+    Payment,
+    StudentDiscount,
+    StudentFinancialAccount,
+)
 from grades.models import Assessment, StudentScore
 
 from .models import (
@@ -122,6 +128,45 @@ class EnrollmentPlacementCorrectionTests(TestCase):
         self.enrollment.refresh_from_db()
         self.assertEqual(self.enrollment.section_id, self.section_a.pk)
 
+    def create_financial_account(self):
+        plan = GradeTuitionPlan.objects.create(
+            academic_year=self.year,
+            grade_level=self.grade,
+            base_tuition_usd="1000.00",
+            created_by=self.admin,
+        )
+        account = StudentFinancialAccount.objects.create(
+            enrollment=self.enrollment,
+            tuition_plan=plan,
+            created_by=self.admin,
+        )
+        return account, plan
+
+    def create_target_tuition_plan(self):
+        return GradeTuitionPlan.objects.create(
+            academic_year=self.year,
+            grade_level=self.other_grade,
+            base_tuition_usd="1500.00",
+            created_by=self.admin,
+        )
+
+    def create_payment(self, account, *, cancelled=False):
+        payment_data = {
+            "account": account,
+            "currency": "usd",
+            "amount": "100.00",
+            "equivalent_usd": "100.00",
+            "recorded_by": self.admin,
+        }
+        if cancelled:
+            payment_data.update(
+                is_cancelled=True,
+                cancellation_reason="إلغاء الدفعة",
+                cancelled_by=self.admin,
+                cancelled_at=timezone.now(),
+            )
+        return Payment.objects.create(**payment_data)
+
     def test_school_admin_can_correct_placement(self):
         response = self.correct()
         self.assertEqual(response.status_code, 200)
@@ -178,10 +223,21 @@ class EnrollmentPlacementCorrectionTests(TestCase):
     def test_same_section_is_rejected(self):
         self.assertEqual(self.correct(section=self.section_a).status_code, 400)
 
-    def test_different_grade_is_rejected(self):
+    def test_cross_grade_correction_without_financial_account_succeeds(self):
+        original_academic_year_id = self.enrollment.academic_year_id
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 200)
+        self.enrollment.refresh_from_db()
+        self.assertEqual(self.enrollment.section_id, self.other_grade_section.pk)
         self.assertEqual(
-            self.correct(section=self.other_grade_section).status_code,
-            400,
+            self.enrollment.section.grade_level_id,
+            self.other_grade.pk,
+        )
+        self.assertEqual(
+            self.enrollment.academic_year_id,
+            original_academic_year_id,
         )
 
     def test_different_academic_year_is_rejected(self):
@@ -301,21 +357,173 @@ class EnrollmentPlacementCorrectionTests(TestCase):
         )
         self.assertEqual(self.correct().status_code, 200)
 
-    def test_financial_account_does_not_block_correction(self):
-        plan = GradeTuitionPlan.objects.create(
-            academic_year=self.year,
-            grade_level=self.grade,
-            base_tuition_usd="1000.00",
-            created_by=self.admin,
-        )
-        account = StudentFinancialAccount.objects.create(
-            enrollment=self.enrollment,
-            tuition_plan=plan,
-            created_by=self.admin,
-        )
+    def test_same_grade_correction_does_not_change_financial_plan(self):
+        account, plan = self.create_financial_account()
         self.assertEqual(self.correct().status_code, 200)
         account.refresh_from_db()
         self.assertEqual(account.tuition_plan_id, plan.pk)
+
+    def test_cross_grade_correction_updates_existing_financial_account_plan(self):
+        account, _ = self.create_financial_account()
+        target_plan = self.create_target_tuition_plan()
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 200)
+        self.enrollment.refresh_from_db()
+        account.refresh_from_db()
+        self.assertEqual(self.enrollment.section_id, self.other_grade_section.pk)
+        self.assertEqual(account.tuition_plan_id, target_plan.pk)
+
+    def test_cross_grade_correction_preserves_percentage_discount(self):
+        account, _ = self.create_financial_account()
+        target_plan = self.create_target_tuition_plan()
+        discount = StudentDiscount.objects.create(
+            account=account,
+            discount_type=StudentDiscount.DiscountType.PERCENTAGE,
+            value="10.00",
+            reason="حسم أخوة",
+            created_by=self.admin,
+        )
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 200)
+        account.refresh_from_db()
+        discount.refresh_from_db()
+        self.assertEqual(account.tuition_plan_id, target_plan.pk)
+        self.assertEqual(discount.value, 10)
+        self.assertEqual(discount.reason, "حسم أخوة")
+        self.assertFalse(discount.is_cancelled)
+
+    def test_cross_grade_correction_preserves_active_fixed_discount(self):
+        account, _ = self.create_financial_account()
+        target_plan = self.create_target_tuition_plan()
+        discount = StudentDiscount.objects.create(
+            account=account,
+            discount_type=StudentDiscount.DiscountType.FIXED,
+            value="100.00",
+            currency="usd",
+            equivalent_usd="100.00",
+            reason="حسم ثابت فعال",
+            created_by=self.admin,
+        )
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 200)
+        self.enrollment.refresh_from_db()
+        account.refresh_from_db()
+        discount.refresh_from_db()
+        self.assertEqual(self.enrollment.section_id, self.other_grade_section.pk)
+        self.assertEqual(account.tuition_plan_id, target_plan.pk)
+        self.assertTrue(StudentDiscount.objects.filter(pk=discount.pk).exists())
+        self.assertEqual(
+            discount.discount_type,
+            StudentDiscount.DiscountType.FIXED,
+        )
+        self.assertEqual(discount.value, 100)
+        self.assertFalse(discount.is_cancelled)
+        self.assertTrue(
+            StudentAuditLog.objects.filter(
+                enrollment=self.enrollment,
+                event_type=StudentAuditLog.EventType.PLACEMENT_CORRECTION,
+                old_section=self.section_a,
+                new_section=self.other_grade_section,
+            ).exists()
+        )
+
+    def test_cross_grade_correction_preserves_cancelled_fixed_discount(self):
+        account, _ = self.create_financial_account()
+        target_plan = self.create_target_tuition_plan()
+        discount = StudentDiscount.objects.create(
+            account=account,
+            discount_type=StudentDiscount.DiscountType.FIXED,
+            value="100.00",
+            currency="usd",
+            equivalent_usd="100.00",
+            reason="حسم ثابت",
+            created_by=self.admin,
+            is_cancelled=True,
+            cancellation_reason="إلغاء الحسم",
+            cancelled_by=self.admin,
+            cancelled_at=timezone.now(),
+        )
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 200)
+        account.refresh_from_db()
+        discount.refresh_from_db()
+        self.assertEqual(account.tuition_plan_id, target_plan.pk)
+        self.assertEqual(discount.value, 100)
+        self.assertEqual(discount.reason, "حسم ثابت")
+        self.assertTrue(discount.is_cancelled)
+        self.assertEqual(discount.cancellation_reason, "إلغاء الحسم")
+
+    def test_cross_grade_correction_with_payment_is_rejected_atomically(self):
+        account, old_plan = self.create_financial_account()
+        self.create_target_tuition_plan()
+        self.create_payment(account)
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data["code"],
+            "ENROLLMENT_CORRECTION_HAS_PAYMENTS",
+        )
+        self.assert_section_unchanged()
+        account.refresh_from_db()
+        self.assertEqual(account.tuition_plan_id, old_plan.pk)
+        self.assertFalse(
+            StudentAuditLog.objects.filter(
+                enrollment=self.enrollment,
+                event_type=StudentAuditLog.EventType.PLACEMENT_CORRECTION,
+            ).exists()
+        )
+
+    def test_cross_grade_correction_with_cancelled_payment_is_rejected(self):
+        account, old_plan = self.create_financial_account()
+        self.create_target_tuition_plan()
+        self.create_payment(account, cancelled=True)
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data["code"],
+            "ENROLLMENT_CORRECTION_HAS_PAYMENTS",
+        )
+        self.assert_section_unchanged()
+        account.refresh_from_db()
+        self.assertEqual(account.tuition_plan_id, old_plan.pk)
+        self.assertFalse(
+            StudentAuditLog.objects.filter(
+                enrollment=self.enrollment,
+                event_type=StudentAuditLog.EventType.PLACEMENT_CORRECTION,
+            ).exists()
+        )
+
+    def test_cross_grade_correction_without_target_plan_is_rejected_atomically(self):
+        account, old_plan = self.create_financial_account()
+
+        response = self.correct(section=self.other_grade_section)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.data["code"],
+            "TARGET_GRADE_TUITION_PLAN_NOT_FOUND",
+        )
+        self.assert_section_unchanged()
+        account.refresh_from_db()
+        self.assertEqual(account.tuition_plan_id, old_plan.pk)
+        self.assertFalse(
+            StudentAuditLog.objects.filter(
+                enrollment=self.enrollment,
+                event_type=StudentAuditLog.EventType.PLACEMENT_CORRECTION,
+            ).exists()
+        )
 
     def test_student_import_row_does_not_block_correction(self):
         job = StudentImportJob.objects.create(
@@ -355,3 +563,14 @@ class EnrollmentPlacementCorrectionTests(TestCase):
         audit = StudentAuditLog.objects.get(enrollment=self.enrollment)
         self.assertEqual(audit.event_type, StudentAuditLog.EventType.SECTION_TRANSFER)
         self.assertEqual(audit.reason, "")
+
+    def test_transfer_still_rejects_different_grade(self):
+        response = self.client_for(self.admin).post(
+            f"/api/v1/students/enrollments/{self.enrollment.pk}/transfer/",
+            {"section": str(self.other_grade_section.pk)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["code"], "SECTION_GRADE_MISMATCH")
+        self.assert_section_unchanged()

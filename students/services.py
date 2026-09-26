@@ -215,6 +215,7 @@ def correct_enrollment_placement(
     actor,
 ) -> Enrollment:
     from attendance.models import AttendanceRecord
+    from finance.models import GradeTuitionPlan, StudentFinancialAccount
     from grades.models import StudentScore
 
     locked_enrollment = (
@@ -263,15 +264,6 @@ def correct_enrollment_placement(
             }
         )
 
-    if locked_target_section.grade_level_id != current_section.grade_level_id:
-        raise ValidationError(
-            {
-                "code": "SECTION_GRADE_MISMATCH",
-                "detail": "لا يمكن تصحيح التسجيل إلى صف دراسي مختلف.",
-                "section": "اختر شعبة تابعة للصف الدراسي نفسه.",
-            }
-        )
-
     if AttendanceRecord.objects.filter(enrollment=locked_enrollment).exists():
         raise ValidationError(
             {
@@ -299,8 +291,47 @@ def correct_enrollment_placement(
             }
         )
 
+    financial_account = None
+    target_tuition_plan = None
+    if locked_target_section.grade_level_id != current_section.grade_level_id:
+        financial_account = (
+            StudentFinancialAccount.objects
+            .select_for_update()
+            .filter(enrollment=locked_enrollment)
+            .first()
+        )
+        if financial_account is not None:
+            if financial_account.payments.exists():
+                raise ValidationError(
+                    {
+                        "code": "ENROLLMENT_CORRECTION_HAS_PAYMENTS",
+                        "detail": (
+                            "لا يمكن تغيير صف الطالب بعد وجود سجل دفعات مالية."
+                        ),
+                    }
+                )
+
+            target_tuition_plan = GradeTuitionPlan.objects.filter(
+                academic_year=locked_enrollment.academic_year,
+                grade_level=locked_target_section.grade_level,
+            ).first()
+            if target_tuition_plan is None:
+                raise ValidationError(
+                    {
+                        "code": "TARGET_GRADE_TUITION_PLAN_NOT_FOUND",
+                        "detail": (
+                            "لا يمكن تغيير صف الطالب لعدم وجود خطة أقساط "
+                            "للصف المستهدف."
+                        ),
+                    }
+                )
+
     locked_enrollment.section = locked_target_section
     locked_enrollment.save(update_fields=["section", "updated_at"])
+
+    if financial_account is not None:
+        financial_account.tuition_plan = target_tuition_plan
+        financial_account.save(update_fields=["tuition_plan", "updated_at"])
 
     StudentAuditLog.objects.create(
         event_type=StudentAuditLog.EventType.PLACEMENT_CORRECTION,
