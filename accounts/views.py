@@ -497,7 +497,7 @@ class UserViewSet(
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        user = serializer.save(created_by=request.user)
         record_audit_event(
             actor=request.user, module=AuditLog.Module.ACCOUNTS,
             action=AuditLog.Action.CREATE,

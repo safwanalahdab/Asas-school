@@ -457,7 +457,7 @@ class SupervisorTeacherAccountScopeTests(TestCase):
         self.assertEqual(self.client.get(self.detail(self.teacher_a)).status_code, 404)
         self.assertEqual(self.client.get(self.detail(self.guardian)).status_code, 200)
 
-    def test_selected_supervisor_can_create_unassigned_teacher_but_not_manage_it(self):
+    def test_selected_supervisor_can_create_and_see_unassigned_teacher(self):
         response = self.client.post(
             self.users_url,
             {"username": "new-unassigned-teacher", "role": User.Role.TEACHER},
@@ -466,7 +466,84 @@ class SupervisorTeacherAccountScopeTests(TestCase):
         self.assertEqual(response.status_code, 201)
         teacher_id = response.data["data"]["id"]
         self.assertIn("temporary_password", response.data["data"])
-        self.assertEqual(self.client.get(f"{self.users_url}{teacher_id}/").status_code, 404)
+        teacher = User.objects.get(pk=teacher_id)
+        self.assertEqual(teacher.created_by, self.supervisor)
+        self.assertEqual(self.client.get(f"{self.users_url}{teacher_id}/").status_code, 200)
+        self.assertIn(teacher.username, self.listed_usernames())
+
+    def create_supervisor_teacher(self, username):
+        response = self.client.post(
+            self.users_url,
+            {"username": username, "role": User.Role.TEACHER},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        return User.objects.get(pk=response.data["data"]["id"])
+
+    def test_other_supervisor_cannot_see_owned_unassigned_teacher(self):
+        teacher = self.create_supervisor_teacher("owned-by-first-supervisor")
+        other = User.objects.create_user(
+            username="teacher-scope-other-supervisor",
+            role=User.Role.SUPERVISOR,
+            password=self.password,
+            must_change_password=False,
+        )
+        set_supervisor_scope(
+            supervisor=other,
+            scope_type=SupervisorScope.ScopeType.SELECTED_STAGES,
+            stages=[GradeLevel.Stage.PRIMARY],
+            actor=self.admin,
+        )
+        self.client.force_authenticate(other, token={"client": "web"})
+
+        self.assertEqual(self.client.get(self.detail(teacher)).status_code, 404)
+
+    def test_admin_created_unassigned_teacher_is_not_visible_by_ownership(self):
+        teacher = User.objects.create_user(
+            username="admin-created-unassigned-teacher",
+            role=User.Role.TEACHER,
+            password=self.password,
+            created_by=self.admin,
+        )
+
+        self.assertEqual(self.client.get(self.detail(teacher)).status_code, 404)
+
+    def test_owned_teacher_with_active_assignment_inside_scope_remains_visible(self):
+        teacher = self.create_supervisor_teacher("owned-inside-scope-teacher")
+        self.assign(teacher, primary=True)
+
+        self.assertEqual(self.client.get(self.detail(teacher)).status_code, 200)
+
+    def test_owned_teacher_with_active_assignment_outside_scope_is_hidden(self):
+        teacher = self.create_supervisor_teacher("owned-outside-scope-teacher")
+        self.assign(teacher, primary=False)
+
+        self.assertEqual(self.client.get(self.detail(teacher)).status_code, 404)
+
+    def test_legacy_unassigned_teacher_without_creator_remains_hidden(self):
+        legacy = self.teacher("legacy-unassigned-teacher")
+        self.assertIsNone(legacy.created_by)
+
+        self.assertEqual(self.client.get(self.detail(legacy)).status_code, 404)
+
+    def test_created_by_does_not_expand_create_permission(self):
+        add_user = Permission.objects.get(
+            content_type__app_label="accounts",
+            codename="add_user",
+        )
+        self.supervisor.user_permissions.remove(add_user)
+
+        response = self.client.post(
+            self.users_url,
+            {"username": "permission-denied-teacher", "role": User.Role.TEACHER},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(User.objects.filter(username="permission-denied-teacher").exists())
+
+    def test_non_teacher_visibility_rules_are_unchanged(self):
+        self.assertIn(self.guardian.username, self.listed_usernames())
 
     def test_business_permissions_remain_required(self):
         cases = (

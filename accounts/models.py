@@ -100,6 +100,15 @@ class User(AbstractUser):
         editable=False,
     )
 
+    created_by = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        related_name="created_users",
+        null=True,
+        blank=True,
+        editable=False,
+    )
+
     # نربط موديل المستخدم بالـManager المخصص.
     objects = UserManager()
 

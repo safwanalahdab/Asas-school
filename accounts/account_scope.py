@@ -19,14 +19,24 @@ def teacher_accounts_visible_to_supervisor(queryset, supervisor, *, on_date=None
     if scope.scope_type == SupervisorScope.ScopeType.ALL:
         return queryset
 
-    stages = scope.stages.values_list("stage", flat=True)
-    matching = active_teacher_assignments(on_date=on_date).filter(
+    active = active_teacher_assignments(on_date=on_date).filter(
         teacher_id=OuterRef("pk"),
+    )
+    stages = scope.stages.values_list("stage", flat=True)
+    matching = active.filter(
         section__grade_level__stage__in=stages,
     )
+
     return queryset.annotate(
-        _supervisor_has_matching_assignment=Exists(matching)
-    ).filter(_supervisor_has_matching_assignment=True)
+        _supervisor_has_active_assignment=Exists(active),
+        _supervisor_has_matching_assignment=Exists(matching),
+    ).filter(
+        Q(_supervisor_has_matching_assignment=True)
+        | Q(
+            _supervisor_has_active_assignment=False,
+            created_by=supervisor,
+        )
+    )
 
 
 def can_view_teacher_account(supervisor, teacher, *, on_date=None):
