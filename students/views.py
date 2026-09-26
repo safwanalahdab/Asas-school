@@ -43,12 +43,14 @@ from .models import (
 from .health_serializers import StudentHealthProfileSerializer
 from .registration_serializers import StudentRegistrationSerializer
 from .serializers import (
+    CorrectEnrollmentPlacementSerializer,
     EnrollmentSerializer,
     GuardianStudentSerializer,
     StudentSerializer,
     TransferEnrollmentSerializer,
 )
 from .services import (
+    correct_enrollment_placement,
     ensure_student_health_profile,
     register_student,
     transfer_student_between_sections,
@@ -502,6 +504,10 @@ class EnrollmentViewSet(
         "create": ("ENROLLMENT_CREATED", "تم تسجيل الطالب في السنة والشعبة بنجاح."),
         "partial_update": ("ENROLLMENT_UPDATED", "تم تحديث تسجيل الطالب بنجاح."),
         "transfer": ("STUDENT_TRANSFERRED", "تم نقل الطالب إلى الشعبة الجديدة بنجاح."),
+        "correct_placement": (
+            "ENROLLMENT_PLACEMENT_CORRECTED",
+            "تم تصحيح شعبة تسجيل الطالب بنجاح.",
+        ),
         "destroy": (
             "ENROLLMENT_DELETED",
             "تم حذف تسجيل الطالب بنجاح.",
@@ -522,6 +528,7 @@ class EnrollmentViewSet(
         "create": "students.add_enrollment",
         "partial_update": "students.change_enrollment",
         "transfer": "students.transfer_student",
+        "correct_placement": "students.correct_enrollment_placement",
         "destroy": "students.delete_enrollment",
     }
 
@@ -636,6 +643,9 @@ class EnrollmentViewSet(
         if self.action == "transfer":
             return TransferEnrollmentSerializer
 
+        if self.action == "correct_placement":
+            return CorrectEnrollmentPlacementSerializer
+
         return EnrollmentSerializer
 
     @action(
@@ -672,6 +682,45 @@ class EnrollmentViewSet(
             {
                 "code": "STUDENT_TRANSFERRED",
                 "detail": "تم نقل الطالب إلى الشعبة الجديدة بنجاح.",
+                "data": response_serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="correct-placement",
+    )
+    def correct_placement(self, request, pk=None):
+        user = request.user
+        enrollment = self.get_object()
+        self._check_supervisor_section_scope(enrollment.section)
+
+        serializer = self.get_serializer(
+            enrollment,
+            data=request.data,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        target_section = serializer.validated_data["section"]
+        self._check_supervisor_section_scope(target_section)
+
+        corrected_enrollment = correct_enrollment_placement(
+            enrollment=enrollment,
+            target_section=target_section,
+            reason=serializer.validated_data["reason"],
+            actor=user,
+        )
+
+        response_serializer = EnrollmentSerializer(
+            corrected_enrollment,
+            context=self.get_serializer_context(),
+        )
+        return Response(
+            {
+                "code": "ENROLLMENT_PLACEMENT_CORRECTED",
+                "detail": "تم تصحيح شعبة تسجيل الطالب بنجاح.",
                 "data": response_serializer.data,
             },
             status=status.HTTP_200_OK,

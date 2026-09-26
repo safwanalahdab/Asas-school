@@ -97,6 +97,7 @@ PERMISSION_CATALOG = tuple(
         ("students.add_guardianstudent", "ربط ولي أمر بطالب"),
         ("students.add_student", "إضافة طالب"),
         ("students.change_enrollment", "تعديل تسجيل دراسي"),
+        ("students.correct_enrollment_placement", "تصحيح شعبة تسجيل الطالب"),
         ("students.change_student", "تعديل طالب"),
         ("students.change_studenthealthprofile", "تعديل الملف الصحي للطالب"),
         ("students.delete_enrollment", "حذف تسجيل دراسي"),

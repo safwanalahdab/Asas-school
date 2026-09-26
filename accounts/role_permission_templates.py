@@ -17,7 +17,9 @@ _SECRETARIAT_PERMISSIONS = _permissions_for_modules(
     "school_requests",
     "students",
     "teaching",
-) | {
+) - {
+    "students.correct_enrollment_placement",
+} | {
     "accounts.add_user",
     "accounts.change_user",
     "accounts.reset_user_password",

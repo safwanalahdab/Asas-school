@@ -204,3 +204,111 @@ def transfer_student_between_sections(
     )
 
     return locked_enrollment
+
+
+@transaction.atomic
+def correct_enrollment_placement(
+    *,
+    enrollment: Enrollment,
+    target_section: Section,
+    reason: str,
+    actor,
+) -> Enrollment:
+    from attendance.models import AttendanceRecord
+    from grades.models import StudentScore
+
+    locked_enrollment = (
+        Enrollment.objects
+        .select_for_update()
+        .select_related(
+            "student",
+            "academic_year",
+            "section",
+            "section__grade_level",
+        )
+        .get(pk=enrollment.pk)
+    )
+    locked_target_section = (
+        Section.objects
+        .select_related("academic_year", "grade_level")
+        .get(pk=target_section.pk)
+    )
+    current_section = locked_enrollment.section
+    normalized_reason = reason.strip()
+
+    if not normalized_reason:
+        raise ValidationError(
+            {
+                "code": "PLACEMENT_CORRECTION_REASON_REQUIRED",
+                "detail": "سبب تصحيح الشعبة مطلوب.",
+                "reason": "سبب التصحيح لا يمكن أن يكون فارغًا.",
+            }
+        )
+
+    if current_section.pk == locked_target_section.pk:
+        raise ValidationError(
+            {
+                "code": "STUDENT_ALREADY_IN_SECTION",
+                "detail": "الطالب مسجّل بالفعل في الشعبة المحددة.",
+                "section": "اختر شعبة مختلفة عن شعبة الطالب الحالية.",
+            }
+        )
+
+    if locked_target_section.academic_year_id != locked_enrollment.academic_year_id:
+        raise ValidationError(
+            {
+                "code": "SECTION_ACADEMIC_YEAR_MISMATCH",
+                "detail": "لا يمكن تصحيح التسجيل إلى شعبة من سنة دراسية مختلفة.",
+                "section": "اختر شعبة تابعة للسنة الدراسية نفسها.",
+            }
+        )
+
+    if locked_target_section.grade_level_id != current_section.grade_level_id:
+        raise ValidationError(
+            {
+                "code": "SECTION_GRADE_MISMATCH",
+                "detail": "لا يمكن تصحيح التسجيل إلى صف دراسي مختلف.",
+                "section": "اختر شعبة تابعة للصف الدراسي نفسه.",
+            }
+        )
+
+    if AttendanceRecord.objects.filter(enrollment=locked_enrollment).exists():
+        raise ValidationError(
+            {
+                "code": "PLACEMENT_CORRECTION_BLOCKED_BY_ATTENDANCE",
+                "detail": "لا يمكن تصحيح الشعبة لوجود سجلات حضور مرتبطة بالتسجيل.",
+            }
+        )
+
+    if StudentScore.objects.filter(enrollment=locked_enrollment).exists():
+        raise ValidationError(
+            {
+                "code": "PLACEMENT_CORRECTION_BLOCKED_BY_GRADES",
+                "detail": "لا يمكن تصحيح الشعبة لوجود علامات مرتبطة بالتسجيل.",
+            }
+        )
+
+    if StudentAuditLog.objects.filter(
+        enrollment=locked_enrollment,
+        event_type=StudentAuditLog.EventType.SECTION_TRANSFER,
+    ).exists():
+        raise ValidationError(
+            {
+                "code": "PLACEMENT_CORRECTION_BLOCKED_BY_TRANSFER",
+                "detail": "لا يمكن تصحيح الشعبة لوجود سجل نقل سابق لهذا التسجيل.",
+            }
+        )
+
+    locked_enrollment.section = locked_target_section
+    locked_enrollment.save(update_fields=["section", "updated_at"])
+
+    StudentAuditLog.objects.create(
+        event_type=StudentAuditLog.EventType.PLACEMENT_CORRECTION,
+        actor=actor,
+        enrollment=locked_enrollment,
+        old_section=current_section,
+        new_section=locked_target_section,
+        reason=normalized_reason,
+    )
+
+    return locked_enrollment

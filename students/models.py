@@ -267,6 +267,13 @@ class Enrollment(models.Model):
     class Meta:
         db_table = "students_enrollment"
 
+        permissions = [
+            (
+                "correct_enrollment_placement",
+                "تصحيح شعبة تسجيل الطالب",
+            ),
+        ]
+
         ordering = [
             "-enrollment_date",
             "-created_at",
@@ -302,6 +309,10 @@ class StudentAuditLog(models.Model):
             "section_transfer",
             "نقل بين الشعب",
         )
+        PLACEMENT_CORRECTION = (
+            "placement_correction",
+            "تصحيح الشعبة",
+        )
 
     id = models.UUIDField(
         primary_key=True,
@@ -336,6 +347,11 @@ class StudentAuditLog(models.Model):
         Section,
         on_delete=models.PROTECT,
         related_name="student_transfer_logs_to",
+    )
+
+    reason = models.TextField(
+        blank=True,
+        default="",
     )
 
     created_at = models.DateTimeField(

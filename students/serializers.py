@@ -271,3 +271,27 @@ class TransferEnrollmentSerializer(serializers.Serializer):
     section = serializers.PrimaryKeyRelatedField(
         queryset=Section.objects.all(),
     )
+
+
+class CorrectEnrollmentPlacementSerializer(serializers.Serializer):
+    section = serializers.PrimaryKeyRelatedField(
+        queryset=Section.objects.select_related(
+            "academic_year",
+            "grade_level",
+        ).all(),
+        required=True,
+        error_messages={
+            "required": "هذا الحقل مطلوب.",
+            "does_not_exist": "الشعبة المحددة غير موجودة.",
+            "incorrect_type": "معرّف الشعبة غير صالح.",
+        },
+    )
+    reason = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+        error_messages={
+            "required": "سبب التصحيح مطلوب.",
+            "blank": "سبب التصحيح لا يمكن أن يكون فارغًا.",
+        },
+    )
