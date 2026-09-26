@@ -17,7 +17,7 @@ from accounts.permission_serializers import (
     UserPermissionsReplaceSerializer,
     UserPermissionsResponseSerializer,
 )
-from accounts.permissions import CanManageUserPermissions
+from accounts.permissions import CanManageUserPermissions, PasswordChangeGate
 from accounts.services import replace_user_business_permissions
 from audit_logs.services import get_request_ip
 from config.api_responses import ArabicApiResponseMixin
@@ -27,7 +27,11 @@ User = get_user_model()
 
 
 class PermissionCatalogView(ArabicApiResponseMixin, APIView):
-    permission_classes = [IsAuthenticated, CanManageUserPermissions]
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        CanManageUserPermissions,
+    ]
 
     @extend_schema(responses={status.HTTP_200_OK: PermissionCatalogSerializer})
     def get(self, request):
@@ -41,7 +45,11 @@ class PermissionCatalogView(ArabicApiResponseMixin, APIView):
 
 
 class UserPermissionsView(ArabicApiResponseMixin, APIView):
-    permission_classes = [IsAuthenticated, CanManageUserPermissions]
+    permission_classes = [
+        IsAuthenticated,
+        PasswordChangeGate,
+        CanManageUserPermissions,
+    ]
 
     def get_target(self, user_id):
         target = get_object_or_404(User, pk=user_id)

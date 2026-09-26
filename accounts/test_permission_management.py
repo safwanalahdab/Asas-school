@@ -89,6 +89,63 @@ class PermissionManagementAccessTests(PermissionApiTestCase):
         self.authenticate(admin)
         self.assertEqual(self.client.get(self.catalog_url()).status_code, 403)
 
+    def test_forced_password_change_blocks_all_permission_management_endpoints(self):
+        admin = self.create_user("forced-password-admin", User.Role.SCHOOL_ADMIN)
+        target = self.create_user("forced-password-target", User.Role.GUARDIAN)
+        initial_permissions = direct_business_permission_codes(target)
+        admin.must_change_password = True
+        admin.save(update_fields=["must_change_password"])
+        self.authenticate(admin)
+
+        responses = (
+            ("catalog", self.client.get(self.catalog_url())),
+            ("user_permissions", self.client.get(self.user_permissions_url(target))),
+            (
+                "replace_user_permissions",
+                self.client.put(
+                    self.user_permissions_url(target),
+                    {"permissions": ["students.view_student"]},
+                    format="json",
+                ),
+            ),
+        )
+
+        for operation, response in responses:
+            with self.subTest(operation=operation):
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(response.data["code"], "PASSWORD_CHANGE_REQUIRED")
+        self.assertEqual(
+            direct_business_permission_codes(target),
+            initial_permissions,
+        )
+
+    def test_permission_management_resumes_after_forced_password_change(self):
+        admin = self.create_user("changed-password-admin", User.Role.SCHOOL_ADMIN)
+        target = self.create_user("changed-password-target", User.Role.GUARDIAN)
+        admin.must_change_password = True
+        admin.save(update_fields=["must_change_password"])
+        self.authenticate(admin)
+        self.assertEqual(self.client.get(self.catalog_url()).status_code, 403)
+
+        admin.must_change_password = False
+        admin.save(update_fields=["must_change_password"])
+
+        self.assertEqual(self.client.get(self.catalog_url()).status_code, 200)
+        self.assertEqual(
+            self.client.get(self.user_permissions_url(target)).status_code,
+            200,
+        )
+        response = self.client.put(
+            self.user_permissions_url(target),
+            {"permissions": ["students.view_student"]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            direct_business_permission_codes(target),
+            ["students.view_student"],
+        )
+
 
 class PermissionCatalogApiTests(PermissionApiTestCase):
     def setUp(self):
