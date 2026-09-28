@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -42,6 +43,13 @@ class StudentImportReadApiTests(TestCase):
             review_rows=1,
             succeeded_rows=0,
             failed_rows=0,
+        )
+
+    @staticmethod
+    def import_permission():
+        return Permission.objects.get(
+            content_type__app_label="students",
+            codename="import_students",
         )
 
     @staticmethod
@@ -188,6 +196,27 @@ class StudentImportReadApiTests(TestCase):
         response = self.client.get(self.rows_url(job))
 
         self.assertEqual(response.status_code, 403)
+
+    def test_direct_permission_allows_job_details_and_rows(self):
+        job = self.make_job()
+        self.make_row(job, 2, StudentImportRow.Status.READY)
+        user = self.authenticate(User.Role.ACCOUNTANT)
+        user.user_permissions.add(self.import_permission())
+
+        self.assertEqual(self.client.get(self.detail_url(job)).status_code, 200)
+        self.assertEqual(self.client.get(self.rows_url(job)).status_code, 200)
+
+    def test_permission_removal_blocks_job_details_and_rows_on_next_request(self):
+        job = self.make_job()
+        self.make_row(job, 2, StudentImportRow.Status.READY)
+        user = self.authenticate(User.Role.SECRETARIAT)
+
+        self.assertEqual(self.client.get(self.detail_url(job)).status_code, 200)
+        self.assertEqual(self.client.get(self.rows_url(job)).status_code, 200)
+        user.user_permissions.remove(self.import_permission())
+
+        self.assertEqual(self.client.get(self.detail_url(job)).status_code, 403)
+        self.assertEqual(self.client.get(self.rows_url(job)).status_code, 403)
 
     def test_unauthenticated_user_cannot_list_rows(self):
         job = self.make_job()

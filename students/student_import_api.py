@@ -2,13 +2,12 @@ from drf_spectacular.utils import extend_schema, extend_schema_field
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, serializers, status
 from rest_framework.parsers import MultiPartParser
-from rest_framework.permissions import BasePermission, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
 
-from accounts.models import User
-from accounts.permissions import PasswordChangeGate
+from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from behavior.permissions import IsWebClientToken
 from config.api_responses import ArabicApiResponseMixin
 
@@ -102,36 +101,14 @@ class StudentImportProcessResponseSerializer(StudentImportJobSummarySerializer):
         }
 
 
-class CanUploadStudentImport(BasePermission):
-    message = {
-        "code": "STUDENT_IMPORT_UPLOAD_DENIED",
-        "detail": "ليس لديك صلاحية لاستيراد الطلاب.",
-    }
-
-    def has_permission(self, request, view):
-        user = request.user
-        return bool(
-            user
-            and user.is_authenticated
-            and user.is_active
-            and (
-                user.is_superuser
-                or user.role
-                in {
-                    User.Role.SCHOOL_ADMIN,
-                    User.Role.SECRETARIAT,
-                }
-            )
-        )
-
-
 class StudentImportUploadView(ArabicApiResponseMixin, APIView):
     permission_classes = [
         IsAuthenticated,
         PasswordChangeGate,
         IsWebClientToken,
-        CanUploadStudentImport,
+        ActionBusinessPermission,
     ]
+    method_permissions = {"post": "students.import_students"}
     parser_classes = [MultiPartParser]
     http_method_names = ["post", "head", "options"]
     response_messages = {
@@ -180,8 +157,9 @@ class StudentImportJobDetailView(
         IsAuthenticated,
         PasswordChangeGate,
         IsWebClientToken,
-        CanUploadStudentImport,
+        ActionBusinessPermission,
     ]
+    method_permissions = {"get": "students.import_students"}
     lookup_url_kwarg = "job_id"
     response_messages = {
         "get": (
@@ -200,8 +178,9 @@ class StudentImportJobRowsView(
         IsAuthenticated,
         PasswordChangeGate,
         IsWebClientToken,
-        CanUploadStudentImport,
+        ActionBusinessPermission,
     ]
+    method_permissions = {"get": "students.import_students"}
     response_messages = {
         "get": (
             "STUDENT_IMPORT_ROWS_RETRIEVED",
@@ -235,8 +214,9 @@ class StudentImportProcessView(ArabicApiResponseMixin, APIView):
         IsAuthenticated,
         PasswordChangeGate,
         IsWebClientToken,
-        CanUploadStudentImport,
+        ActionBusinessPermission,
     ]
+    method_permissions = {"post": "students.import_students"}
     http_method_names = ["post", "head", "options"]
     response_messages = {
         "post": (

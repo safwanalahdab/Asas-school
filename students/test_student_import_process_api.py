@@ -1,6 +1,7 @@
 from datetime import date
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -115,6 +116,13 @@ class StudentImportProcessApiTests(TestCase):
     def process_url(job):
         return f"/api/v1/students/imports/{job.pk}/process/"
 
+    @staticmethod
+    def import_permission():
+        return Permission.objects.get(
+            content_type__app_label="students",
+            codename="import_students",
+        )
+
     def test_admin_can_process_ready_job(self):
         job = self.make_job()
         self.authenticate(User.Role.SCHOOL_ADMIN)
@@ -158,6 +166,26 @@ class StudentImportProcessApiTests(TestCase):
                 self.assertEqual(response.status_code, 403)
                 job.refresh_from_db()
                 self.assertEqual(job.status, StudentImportJob.Status.READY)
+
+    def test_teacher_with_direct_permission_can_process_ready_job(self):
+        job = self.make_job()
+        user = self.authenticate(User.Role.TEACHER)
+        user.user_permissions.add(self.import_permission())
+
+        response = self.client.post(self.process_url(job), {}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_permission_removal_after_job_creation_blocks_processing(self):
+        job = self.make_job()
+        user = self.authenticate(User.Role.SECRETARIAT)
+        user.user_permissions.remove(self.import_permission())
+
+        response = self.client.post(self.process_url(job), {}, format="json")
+
+        self.assertEqual(response.status_code, 403)
+        job.refresh_from_db()
+        self.assertEqual(job.status, StudentImportJob.Status.READY)
 
     def test_unauthenticated_request_is_denied(self):
         job = self.make_job()

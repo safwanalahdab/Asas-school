@@ -103,6 +103,7 @@ PERMISSION_CATALOG = tuple(
         ("students.delete_enrollment", "حذف تسجيل دراسي"),
         ("students.delete_guardianstudent", "حذف ارتباط ولي أمر بطالب"),
         ("students.delete_student", "حذف طالب"),
+        ("students.import_students", "استيراد الطلاب"),
         ("students.register_student", "تسجيل طالب"),
         ("students.transfer_student", "نقل طالب بين الشعب"),
         ("students.view_enrollment", "عرض التسجيلات الدراسية"),

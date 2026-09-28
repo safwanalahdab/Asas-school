@@ -31,22 +31,26 @@ _SECRETARIAT_PERMISSIONS = _permissions_for_modules(
     "finance.view_studentfinancialaccount",
 }
 
-_SUPERVISOR_PERMISSIONS = _permissions_for_modules(
-    "academics",
-    "announcements",
-    "attendance",
-    "behavior",
-    "grades",
-    "homework",
-    "school_requests",
-    "students",
-    "teaching",
-) | {
-    "accounts.add_user",
-    "accounts.change_user",
-    "accounts.reset_user_password",
-    "accounts.set_user_active",
-    "accounts.view_user",
+_SUPERVISOR_PERMISSIONS = (
+    _permissions_for_modules(
+        "academics",
+        "announcements",
+        "attendance",
+        "behavior",
+        "grades",
+        "homework",
+        "school_requests",
+        "students",
+        "teaching",
+    ) | {
+        "accounts.add_user",
+        "accounts.change_user",
+        "accounts.reset_user_password",
+        "accounts.set_user_active",
+        "accounts.view_user",
+    }
+) - {
+    "students.import_students",
 }
 
 _TEACHER_PERMISSIONS = {

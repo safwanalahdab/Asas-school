@@ -413,6 +413,9 @@ class StudentImportJob(models.Model):
 
     class Meta:
         db_table = "students_import_job"
+        permissions = [
+            ("import_students", "استيراد الطلاب"),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(file_size__gte=0),

@@ -66,6 +66,7 @@ class SupervisorAcademicScopePolicyTests(TestCase):
         cls.current_preparatory = cls.make_student("Current", "Preparatory")
         cls.old_primary_current_preparatory = cls.make_student("Moved", "Student")
         cls.without_enrollment = cls.make_student("No", "Enrollment")
+        cls.historical_only = cls.make_student("Historical", "Only")
         cls.primary_enrollment = cls.enroll(
             cls.current_primary, cls.active_year, cls.primary_active
         )
@@ -79,6 +80,11 @@ class SupervisorAcademicScopePolicyTests(TestCase):
             cls.old_primary_current_preparatory,
             cls.active_year,
             cls.preparatory_active,
+        )
+        cls.historical_only_enrollment = cls.enroll(
+            cls.historical_only,
+            cls.old_year,
+            cls.primary_old,
         )
 
         cls.admin = cls.make_user("scope-admin", User.Role.SCHOOL_ADMIN)
@@ -199,14 +205,22 @@ class SupervisorAcademicScopePolicyTests(TestCase):
         scoped = filter_students_by_supervisor_scope(
             Student.objects.all(), self.primary_supervisor
         )
-        self.assertEqual(self.ids(scoped), {self.current_primary.pk})
-        self.assertEqual(scoped.count(), 1)
+        self.assertEqual(
+            self.ids(scoped),
+            {
+                self.current_primary.pk,
+                self.without_enrollment.pk,
+                self.historical_only.pk,
+            },
+        )
+        self.assertEqual(scoped.count(), 3)
         self.assertFalse(
             can_access_student(
                 self.primary_supervisor, self.old_primary_current_preparatory
             )
         )
-        self.assertFalse(can_access_student(self.primary_supervisor, self.without_enrollment))
+        self.assertTrue(can_access_student(self.primary_supervisor, self.without_enrollment))
+        self.assertTrue(can_access_student(self.primary_supervisor, self.historical_only))
 
     def test_enrollments_keep_their_own_historical_stage(self):
         scoped = filter_enrollments_by_supervisor_scope(
@@ -214,7 +228,11 @@ class SupervisorAcademicScopePolicyTests(TestCase):
         )
         self.assertEqual(
             self.ids(scoped),
-            {self.primary_enrollment.pk, self.old_primary_enrollment.pk},
+            {
+                self.primary_enrollment.pk,
+                self.old_primary_enrollment.pk,
+                self.historical_only_enrollment.pk,
+            },
         )
 
     def test_all_scope_keeps_students_without_enrollments_visible(self):
@@ -227,11 +245,14 @@ class SupervisorAcademicScopePolicyTests(TestCase):
             self.ids(Student.objects.all()),
         )
 
-    def test_missing_scope_fails_closed_for_stage_resources(self):
-        self.assertFalse(
-            filter_students_by_supervisor_scope(
-                Student.objects.all(), self.missing_scope_supervisor
-            ).exists()
+    def test_missing_scope_sees_only_unassigned_students(self):
+        self.assertEqual(
+            self.ids(
+                filter_students_by_supervisor_scope(
+                    Student.objects.all(), self.missing_scope_supervisor
+                )
+            ),
+            {self.without_enrollment.pk, self.historical_only.pk},
         )
         self.assertFalse(
             filter_enrollments_by_supervisor_scope(
@@ -239,13 +260,29 @@ class SupervisorAcademicScopePolicyTests(TestCase):
             ).exists()
         )
 
-    def test_no_active_year_does_not_fall_back_to_historical_enrollment(self):
+    def test_no_active_year_fails_closed_for_scoped_and_missing_supervisors(self):
         self.active_year.status = AcademicYear.Status.CLOSED
         self.active_year.save(update_fields=["status"])
         self.assertFalse(
             filter_students_by_supervisor_scope(
                 Student.objects.all(), self.primary_supervisor
             ).exists()
+        )
+        self.assertFalse(
+            filter_students_by_supervisor_scope(
+                Student.objects.all(), self.missing_scope_supervisor
+            ).exists()
+        )
+        self.assertFalse(
+            can_access_student(self.primary_supervisor, self.without_enrollment)
+        )
+        self.assertEqual(
+            self.ids(
+                filter_students_by_supervisor_scope(
+                    Student.objects.all(), self.all_supervisor
+                )
+            ),
+            self.ids(Student.objects.all()),
         )
 
     def test_global_resource_and_grade_stage_write_policies(self):

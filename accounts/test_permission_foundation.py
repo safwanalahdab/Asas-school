@@ -76,6 +76,29 @@ class RoleTemplateBusinessContractTests(TestCase):
         "behavior.delete_behaviornote",
     }
     audit_log_permission = "audit_logs.view_auditlog"
+    student_import_permission = "students.import_students"
+
+    def test_student_import_defaults_are_limited_to_admin_and_secretariat(self):
+        self.assertIn(
+            self.student_import_permission,
+            ROLE_PERMISSION_TEMPLATES[User.Role.SCHOOL_ADMIN],
+        )
+        self.assertIn(
+            self.student_import_permission,
+            ROLE_PERMISSION_TEMPLATES[User.Role.SECRETARIAT],
+        )
+        for role in (
+            User.Role.SUPERVISOR,
+            User.Role.TEACHER,
+            User.Role.ACCOUNTANT,
+            User.Role.TECH_SUPPORT,
+            User.Role.GUARDIAN,
+        ):
+            with self.subTest(role=role):
+                self.assertNotIn(
+                    self.student_import_permission,
+                    ROLE_PERMISSION_TEMPLATES[role],
+                )
 
     def test_supervisor_gets_behavior_crud_permissions(self):
         self.assertTrue(

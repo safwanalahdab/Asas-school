@@ -54,6 +54,9 @@ class SupervisorEnrollmentScopeApiTests(TestCase):
             cls.current_year, cls.secondary, "Secondary A"
         )
         cls.next_primary = cls.section(cls.next_year, cls.primary, "Next Primary")
+        cls.next_secondary = cls.section(
+            cls.next_year, cls.secondary, "Next Secondary"
+        )
 
         cls.historical_student = cls.student("Historical")
         cls.old_primary_enrollment = cls.enroll(
@@ -200,7 +203,7 @@ class SupervisorEnrollmentScopeApiTests(TestCase):
                 response = client.get("/api/v1/students/enrollments/", params)
                 self.assertEqual(self.rows(response), [])
 
-    def test_create_checks_target_section_not_student_history(self):
+    def test_create_allows_unplaced_student_and_ignores_outside_history(self):
         client = self.client_for(self.primary_supervisor)
         no_history = self.student("No History")
         created = client.post(
@@ -214,10 +217,88 @@ class SupervisorEnrollmentScopeApiTests(TestCase):
         self.enroll(old_outside, self.old_year, self.old_secondary)
         created_after_outside_history = client.post(
             "/api/v1/students/enrollments/",
-            self.enrollment_payload(old_outside, self.next_year, self.next_primary),
+            self.enrollment_payload(
+                old_outside,
+                self.current_year,
+                self.current_primary_a,
+            ),
             format="json",
         )
         self.assertEqual(created_after_outside_history.status_code, 201)
+
+    def test_create_rejects_direct_uuid_for_student_placed_outside_scope(self):
+        response = self.client_for(self.primary_supervisor).post(
+            "/api/v1/students/enrollments/",
+            self.enrollment_payload(
+                self.secondary_student,
+                self.next_year,
+                self.next_primary,
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(
+            Enrollment.objects.filter(
+                student=self.secondary_student,
+                academic_year=self.next_year,
+            ).exists()
+        )
+
+    def test_create_allows_in_scope_student_with_in_scope_target(self):
+        response = self.client_for(self.primary_supervisor).post(
+            "/api/v1/students/enrollments/",
+            self.enrollment_payload(
+                self.primary_student,
+                self.next_year,
+                self.next_primary,
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+    def test_create_rejects_in_scope_student_with_outside_target(self):
+        response = self.client_for(self.primary_supervisor).post(
+            "/api/v1/students/enrollments/",
+            self.enrollment_payload(
+                self.primary_student,
+                self.next_year,
+                self.next_secondary,
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_create_rejects_unplaced_student_with_outside_target(self):
+        student = self.student("Unplaced Outside Target")
+        response = self.client_for(self.primary_supervisor).post(
+            "/api/v1/students/enrollments/",
+            self.enrollment_payload(
+                student,
+                self.current_year,
+                self.current_secondary,
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Enrollment.objects.filter(student=student).exists())
+
+    def test_all_scope_create_allows_students_across_stages(self):
+        student = self.student("All Scope Secondary")
+        response = self.client_for(self.all_supervisor).post(
+            "/api/v1/students/enrollments/",
+            self.enrollment_payload(
+                student,
+                self.current_year,
+                self.current_secondary,
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
 
     def test_create_rejects_out_of_scope_section_uuid(self):
         student = self.student("Rejected Create")
@@ -299,6 +380,38 @@ class SupervisorEnrollmentScopeApiTests(TestCase):
         )
         self.assertEqual(source_outside.status_code, 404)
 
+    def test_create_scope_change_does_not_change_transfer_or_correction(self):
+        transfer_student = self.student("Unchanged Transfer Action")
+        transfer_enrollment = self.enroll(
+            transfer_student,
+            self.current_year,
+            self.current_primary_a,
+        )
+        correction_student = self.student("Unchanged Correction Action")
+        correction_enrollment = self.enroll(
+            correction_student,
+            self.current_year,
+            self.current_primary_a,
+        )
+        client = self.client_for(self.primary_supervisor)
+
+        transferred = client.post(
+            f"/api/v1/students/enrollments/{transfer_enrollment.pk}/transfer/",
+            {"section": str(self.current_primary_b.pk)},
+            format="json",
+        )
+        self.assertEqual(transferred.status_code, 200)
+
+        corrected = client.post(
+            f"/api/v1/students/enrollments/{correction_enrollment.pk}/correct-placement/",
+            {
+                "section": str(self.current_primary_b.pk),
+                "reason": "Regression coverage for SUP-002",
+            },
+            format="json",
+        )
+        self.assertEqual(corrected.status_code, 200)
+
     def test_all_multi_and_missing_scope_states(self):
         all_response = self.client_for(self.all_supervisor).get(
             "/api/v1/students/enrollments/"
@@ -367,3 +480,21 @@ class SupervisorEnrollmentScopeApiTests(TestCase):
             str(self.secondary_enrollment.pk),
             {row["id"] for row in self.rows(response)},
         )
+
+    def test_admin_and_secretariat_create_behavior_is_unchanged(self):
+        for user, label in (
+            (self.admin, "Admin"),
+            (self.secretariat, "Secretariat"),
+        ):
+            with self.subTest(role=user.role):
+                student = self.student(f"{label} Create")
+                response = self.client_for(user).post(
+                    "/api/v1/students/enrollments/",
+                    self.enrollment_payload(
+                        student,
+                        self.current_year,
+                        self.current_secondary,
+                    ),
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 201)

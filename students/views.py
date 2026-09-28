@@ -21,10 +21,12 @@ from django.db.models.deletion import ProtectedError
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from accounts.models import User
+from accounts.account_scope import can_use_guardian_for_student_link
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from behavior.permissions import IsWebClientToken
 from academics.supervisor_academic_scope import (
     can_access_section,
+    can_create_enrollment_for_student,
     filter_enrollments_by_supervisor_scope,
     filter_students_by_supervisor_scope,
     is_stage_scoped_supervisor,
@@ -469,6 +471,20 @@ class GuardianStudentViewSet(
                     "detail": "الطالب المحدد خارج نطاق مراحل الموجّه.",
                 }
             )
+        guardian = serializer.validated_data["guardian"]
+        if (
+            self.request.user.role == User.Role.SUPERVISOR
+            and not can_use_guardian_for_student_link(
+                self.request.user,
+                guardian,
+            )
+        ):
+            raise PermissionDenied(
+                {
+                    "code": "SUPERVISOR_GUARDIAN_SCOPE_DENIED",
+                    "detail": "ولي الأمر المحدد خارج نطاق الموجّه.",
+                }
+            )
         link = serializer.save()
         actor_name = get_actor_display(self.request.user)
         record_audit_event(
@@ -544,6 +560,16 @@ class EnrollmentViewSet(
     @transaction.atomic
     def perform_create(self, serializer):
         self._check_supervisor_section_scope(serializer.validated_data["section"])
+        if not can_create_enrollment_for_student(
+            self.request.user,
+            serializer.validated_data["student"],
+        ):
+            raise PermissionDenied(
+                {
+                    "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
+                    "detail": "الطالب المحدد خارج نطاق مراحل الموجّه.",
+                }
+            )
         enrollment = serializer.save()
 
         ensure_financial_account_for_enrollment(

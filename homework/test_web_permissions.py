@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from academics.models import AcademicYear, GradeLevel, GradeSubject, Section, Subject
@@ -56,6 +57,239 @@ class HomeworkWebPermissionTests(TestCase):
             "teacher_assignment": str(assignment.pk), "title": "New homework",
             "description": "Description", "homework_date": "2026-02-03", "due_date": "2026-02-04",
         }
+
+    def dated_assignment(self, *, start_date, end_date=None):
+        return TeacherAssignment.objects.create(
+            teacher=self.teacher,
+            grade_subject=self.assignment.grade_subject,
+            section=self.assignment.section,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def authenticate_teacher_with_permissions(self, *codenames):
+        for codename in codenames:
+            self.grant(self.teacher, f"homework.{codename}")
+        self.client.force_authenticate(
+            self.teacher,
+            token={"client": "web"},
+        )
+
+    def end_assignment_yesterday(self, assignment):
+        today = timezone.localdate()
+        assignment.start_date = today - timedelta(days=2)
+        assignment.end_date = today - timedelta(days=1)
+        assignment.save(update_fields=["start_date", "end_date"])
+
+    def test_teacher_can_read_homework_for_ended_assignment(self):
+        self.end_assignment_yesterday(self.assignment)
+        self.authenticate_teacher_with_permissions("view_homework")
+
+        response = self.client.get("/api/v1/homework/homeworks/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            str(self.own.pk),
+            [item["id"] for item in response.data["data"]["results"]],
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/api/v1/homework/homeworks/{self.own.pk}/"
+            ).status_code,
+            200,
+        )
+
+    def test_teacher_cannot_create_homework_for_ended_assignment(self):
+        self.end_assignment_yesterday(self.assignment)
+        self.authenticate_teacher_with_permissions("add_homework")
+        count = Homework.objects.count()
+
+        response = self.client.post(
+            "/api/v1/homework/homeworks/",
+            self.payload(self.assignment),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "HOMEWORK_ASSIGNMENT_ENDED")
+        self.assertEqual(Homework.objects.count(), count)
+
+    def test_teacher_cannot_update_homework_for_ended_assignment(self):
+        self.end_assignment_yesterday(self.assignment)
+        self.authenticate_teacher_with_permissions("change_homework")
+
+        response = self.client.patch(
+            f"/api/v1/homework/homeworks/{self.own.pk}/",
+            {"title": "Changed"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "HOMEWORK_ASSIGNMENT_ENDED")
+        self.own.refresh_from_db()
+        self.assertEqual(self.own.title, "Homework")
+
+    def test_teacher_cannot_bypass_ended_assignment_update_by_reassignment(self):
+        today = timezone.localdate()
+        self.end_assignment_yesterday(self.assignment)
+        active_assignment = self.dated_assignment(
+            start_date=today - timedelta(days=1),
+        )
+        future_assignment = self.dated_assignment(
+            start_date=today + timedelta(days=1),
+        )
+        self.authenticate_teacher_with_permissions("change_homework")
+
+        for replacement in (active_assignment, future_assignment):
+            with self.subTest(replacement=replacement.pk):
+                response = self.client.patch(
+                    f"/api/v1/homework/homeworks/{self.own.pk}/",
+                    {"teacher_assignment": str(replacement.pk)},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 403)
+                self.assertEqual(
+                    response.data["code"],
+                    "HOMEWORK_ASSIGNMENT_ENDED",
+                )
+                self.own.refresh_from_db()
+                self.assertEqual(
+                    self.own.teacher_assignment_id,
+                    self.assignment.pk,
+                )
+
+    def test_teacher_cannot_delete_homework_for_ended_assignment(self):
+        self.end_assignment_yesterday(self.assignment)
+        self.authenticate_teacher_with_permissions("delete_homework")
+
+        response = self.client.delete(
+            f"/api/v1/homework/homeworks/{self.own.pk}/"
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "HOMEWORK_ASSIGNMENT_ENDED")
+        self.assertTrue(Homework.objects.filter(pk=self.own.pk).exists())
+
+    def test_teacher_can_crud_homework_for_future_assignment(self):
+        assignment = self.dated_assignment(
+            start_date=timezone.localdate() + timedelta(days=1),
+        )
+        self.authenticate_teacher_with_permissions(
+            "add_homework",
+            "change_homework",
+            "delete_homework",
+        )
+
+        create_response = self.client.post(
+            "/api/v1/homework/homeworks/",
+            self.payload(assignment),
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        homework = Homework.objects.get(
+            teacher_assignment=assignment,
+            title="New homework",
+        )
+        self.assertEqual(self.client.patch(
+            f"/api/v1/homework/homeworks/{homework.pk}/",
+            {"title": "Future changed"},
+            format="json",
+        ).status_code, 200)
+        self.assertEqual(self.client.delete(
+            f"/api/v1/homework/homeworks/{homework.pk}/"
+        ).status_code, 200)
+
+    def test_teacher_can_crud_homework_for_active_assignment(self):
+        assignment = self.dated_assignment(
+            start_date=timezone.localdate() - timedelta(days=1),
+        )
+        self.authenticate_teacher_with_permissions(
+            "add_homework",
+            "change_homework",
+            "delete_homework",
+        )
+
+        create_response = self.client.post(
+            "/api/v1/homework/homeworks/",
+            self.payload(assignment),
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        homework = Homework.objects.get(
+            teacher_assignment=assignment,
+            title="New homework",
+        )
+        self.assertEqual(self.client.patch(
+            f"/api/v1/homework/homeworks/{homework.pk}/",
+            {"title": "Active changed"},
+            format="json",
+        ).status_code, 200)
+        self.assertEqual(self.client.delete(
+            f"/api/v1/homework/homeworks/{homework.pk}/"
+        ).status_code, 200)
+
+    def test_teacher_can_crud_when_assignment_ends_today(self):
+        today = timezone.localdate()
+        assignment = self.dated_assignment(
+            start_date=today - timedelta(days=1),
+            end_date=today,
+        )
+        self.authenticate_teacher_with_permissions(
+            "add_homework",
+            "change_homework",
+            "delete_homework",
+        )
+
+        create_response = self.client.post(
+            "/api/v1/homework/homeworks/",
+            self.payload(assignment),
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        homework = Homework.objects.get(
+            teacher_assignment=assignment,
+            title="New homework",
+        )
+        self.assertEqual(self.client.patch(
+            f"/api/v1/homework/homeworks/{homework.pk}/",
+            {"title": "Today changed"},
+            format="json",
+        ).status_code, 200)
+        self.assertEqual(self.client.delete(
+            f"/api/v1/homework/homeworks/{homework.pk}/"
+        ).status_code, 200)
+
+    def test_ended_assignment_does_not_change_non_teacher_behavior(self):
+        self.end_assignment_yesterday(self.assignment)
+        for codename in (
+            "homework.add_homework",
+            "homework.change_homework",
+            "homework.delete_homework",
+        ):
+            self.grant(self.admin, codename)
+        self.client.force_authenticate(
+            self.admin,
+            token={"client": "web"},
+        )
+
+        create_response = self.client.post(
+            "/api/v1/homework/homeworks/",
+            self.payload(self.assignment),
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, 201)
+        homework = Homework.objects.filter(
+            teacher_assignment=self.assignment,
+            title="New homework",
+        ).latest("created_at")
+        self.assertEqual(self.client.patch(
+            f"/api/v1/homework/homeworks/{homework.pk}/",
+            {"title": "Admin changed"},
+            format="json",
+        ).status_code, 200)
+        self.assertEqual(self.client.delete(
+            f"/api/v1/homework/homeworks/{homework.pk}/"
+        ).status_code, 200)
 
     def test_teacher_permissions_and_assignment_scope(self):
         url = "/api/v1/homework/homeworks/"

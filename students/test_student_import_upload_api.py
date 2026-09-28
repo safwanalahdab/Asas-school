@@ -2,6 +2,7 @@ from datetime import date
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from openpyxl import Workbook
@@ -114,6 +115,13 @@ class StudentImportUploadApiTests(TestCase):
             format="multipart",
         )
 
+    @staticmethod
+    def import_permission():
+        return Permission.objects.get(
+            content_type__app_label="students",
+            codename="import_students",
+        )
+
     def test_school_admin_can_upload(self):
         self.authenticate(User.Role.SCHOOL_ADMIN)
 
@@ -128,6 +136,28 @@ class StudentImportUploadApiTests(TestCase):
         response = self.upload(self.workbook_upload(self.valid_row()))
 
         self.assertEqual(response.status_code, 201)
+
+    def test_secretariat_is_denied_after_import_permission_is_removed(self):
+        user = self.authenticate(User.Role.SECRETARIAT)
+        user.user_permissions.remove(self.import_permission())
+
+        response = self.upload(self.workbook_upload(self.valid_row()))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(StudentImportJob.objects.exists())
+
+    def test_roles_without_default_access_can_upload_after_direct_grant(self):
+        for role in (
+            User.Role.SUPERVISOR,
+            User.Role.TEACHER,
+            User.Role.ACCOUNTANT,
+            User.Role.TECH_SUPPORT,
+        ):
+            with self.subTest(role=role):
+                user = self.authenticate(role)
+                user.user_permissions.add(self.import_permission())
+                response = self.upload(self.workbook_upload(self.valid_row()))
+                self.assertEqual(response.status_code, 201)
 
     def test_unauthorized_roles_are_denied(self):
         for role in (

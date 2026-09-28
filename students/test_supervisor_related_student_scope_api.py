@@ -50,7 +50,6 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         cls.enroll(cls.outside, cls.active_year, cls.active_secondary)
         cls.historical_only = cls.student("Historical")
         cls.enroll(cls.historical_only, cls.old_year, cls.old_primary)
-        cls.enroll(cls.historical_only, cls.active_year, cls.active_preparatory)
         cls.preparatory_student = cls.student("Preparatory")
         cls.enroll(
             cls.preparatory_student, cls.active_year, cls.active_preparatory
@@ -133,12 +132,13 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         )
 
     @classmethod
-    def user(cls, username, role):
+    def user(cls, username, role, *, created_by=None):
         return User.objects.create_user(
             username=username,
             password="x",
             role=role,
             must_change_password=False,
+            created_by=created_by,
         )
 
     @classmethod
@@ -201,15 +201,15 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         self.assertFalse(
             StudentHealthProfile.objects.filter(student=outside_without_profile).exists()
         )
-        self.assertEqual(client.get(self.health_url(self.unenrolled)).status_code, 404)
-        self.assertFalse(
+        self.assertEqual(client.get(self.health_url(self.unenrolled)).status_code, 200)
+        self.assertTrue(
             StudentHealthProfile.objects.filter(student=self.unenrolled).exists()
         )
 
     def test_health_historical_multi_all_missing_and_no_active_year(self):
         primary = self.client_for(self.primary_supervisor)
         self.assertEqual(
-            primary.get(self.health_url(self.historical_only)).status_code, 404
+            primary.get(self.health_url(self.historical_only)).status_code, 200
         )
         multi = self.client_for(self.multi_supervisor)
         self.assertEqual(
@@ -223,6 +223,12 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         self.active_year.status = AcademicYear.Status.CLOSED
         self.active_year.save(update_fields=["status"])
         self.assertEqual(primary.get(self.health_url(self.inside)).status_code, 404)
+        self.assertEqual(
+            primary.get(self.health_url(self.unenrolled)).status_code, 404
+        )
+        self.assertEqual(
+            missing.get(self.health_url(self.unenrolled)).status_code, 404
+        )
 
     def test_health_business_permission_is_still_required(self):
         permission = Permission.objects.get(
@@ -241,7 +247,8 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         client = self.client_for(self.primary_supervisor)
         response = client.get(self.links_url)
         self.assertEqual(
-            {row["id"] for row in self.rows(response)}, {str(self.inside_link.pk)}
+            {row["id"] for row in self.rows(response)},
+            {str(self.inside_link.pk), str(self.historical_link.pk)},
         )
         self.assertEqual(
             client.get(f"{self.links_url}{self.inside_link.pk}/").status_code, 200
@@ -251,7 +258,7 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         )
         self.assertEqual(
             client.get(f"{self.links_url}{self.historical_link.pk}/").status_code,
-            404,
+            200,
         )
 
     def test_guardian_link_create_checks_student_foreign_key(self):
@@ -268,7 +275,11 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
 
         eligible = self.student("Eligible Link")
         self.enroll(eligible, self.active_year, self.active_primary)
-        guardian = self.user("eligible-link-guardian", User.Role.GUARDIAN)
+        guardian = self.user(
+            "eligible-link-guardian",
+            User.Role.GUARDIAN,
+            created_by=self.primary_supervisor,
+        )
         allowed = client.post(
             self.links_url,
             {"guardian": str(guardian.pk), "student": str(eligible.pk)},
@@ -280,12 +291,16 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         self.enroll(
             outside_without_link, self.active_year, self.active_secondary
         )
-        for student, username in (
-            (outside_without_link, "outside-link-new-guardian"),
-            (self.unenrolled, "unenrolled-link-guardian"),
+        for student, username, expected_status in (
+            (outside_without_link, "outside-link-new-guardian", 403),
+            (self.unenrolled, "unenrolled-link-guardian", 201),
         ):
             with self.subTest(student=student.pk):
-                new_guardian = self.user(username, User.Role.GUARDIAN)
+                new_guardian = self.user(
+                    username,
+                    User.Role.GUARDIAN,
+                    created_by=self.primary_supervisor,
+                )
                 response = client.post(
                     self.links_url,
                     {
@@ -294,11 +309,12 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
                     },
                     format="json",
                 )
-                self.assertEqual(response.status_code, 403)
-                self.assertFalse(
+                self.assertEqual(response.status_code, expected_status)
+                self.assertEqual(
                     GuardianStudent.objects.filter(
                         guardian=new_guardian, student=student
-                    ).exists()
+                    ).exists(),
+                    expected_status == 201,
                 )
 
     def test_guardian_link_delete_inside_and_outside_scope(self):
@@ -330,7 +346,7 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
                     self.rows(client.get(self.links_url, params)), []
                 )
 
-    def test_registration_exception_creates_new_records_but_no_later_access(self):
+    def test_registration_creates_unassigned_records_with_later_access(self):
         client = self.client_for(self.primary_supervisor)
         response = client.post(
             "/api/v1/students/register/",
@@ -355,13 +371,13 @@ class SupervisorRelatedStudentScopeApiTests(TestCase):
         student = Student.objects.get(pk=response.data["data"]["student"]["id"])
         self.assertTrue(StudentHealthProfile.objects.filter(student=student).exists())
         self.assertTrue(GuardianStudent.objects.filter(student=student).exists())
-        self.assertEqual(client.get(self.health_url(student)).status_code, 404)
+        self.assertEqual(client.get(self.health_url(student)).status_code, 200)
         self.assertEqual(
-            client.get(f"/api/v1/students/students/{student.pk}/").status_code, 404
+            client.get(f"/api/v1/students/students/{student.pk}/").status_code, 200
         )
         link = GuardianStudent.objects.get(student=student)
         self.assertEqual(
-            client.delete(f"{self.links_url}{link.pk}/").status_code, 404
+            client.delete(f"{self.links_url}{link.pk}/").status_code, 200
         )
 
         self.enroll(student, self.active_year, self.active_primary)

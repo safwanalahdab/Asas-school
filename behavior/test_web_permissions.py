@@ -5,8 +5,15 @@ from django.contrib.auth.models import Permission
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from academics.models import AcademicYear, GradeLevel, Section
+from academics.models import (
+    AcademicYear,
+    GradeLevel,
+    GradeSubject,
+    Section,
+    Subject,
+)
 from students.models import Enrollment, Student
+from teaching.models import TeacherAssignment
 
 from .models import BehaviorNote
 
@@ -24,6 +31,18 @@ class BehaviorWebPermissionTests(TestCase):
         year = AcademicYear.objects.create(start_date=date(2026, 1, 1), end_date=date(2026, 12, 31))
         grade = GradeLevel.objects.create(stage=GradeLevel.Stage.PRIMARY, name="Behavior grade")
         section = Section.objects.create(academic_year=year, grade_level=grade, name="A")
+        subject = Subject.objects.create(name="Behavior subject")
+        grade_subject = GradeSubject.objects.create(
+            academic_year=year,
+            grade_level=grade,
+            subject=subject,
+        )
+        TeacherAssignment.objects.create(
+            teacher=self.teacher,
+            grade_subject=grade_subject,
+            section=section,
+            start_date=date(2026, 1, 1),
+        )
         student = Student.objects.create(
             first_name="Behavior", last_name="Student", birth_date=date(2015, 1, 1),
             gender=Student.Gender.MALE,
@@ -43,7 +62,7 @@ class BehaviorWebPermissionTests(TestCase):
         app, codename = code.split(".")
         user.user_permissions.add(Permission.objects.get(content_type__app_label=app, codename=codename))
 
-    def test_actions_are_independent_and_teacher_has_no_invented_scope(self):
+    def test_actions_are_independent_with_teacher_assignment_scope(self):
         url = "/api/v1/behavior/notes/"
         detail = f"{url}{self.note.pk}/"
         self.client.force_authenticate(self.teacher, token={"client": "web"})

@@ -5,6 +5,8 @@ from accounts.account_scope import (
     can_edit_teacher_account,
     can_reset_teacher_password,
     can_set_teacher_active,
+    can_view_guardian_account,
+    guardian_accounts_visible_to_supervisor,
     teacher_accounts_visible_to_supervisor,
 )
 
@@ -88,13 +90,16 @@ def get_visible_accounts_queryset(user, queryset):
         )
 
     if user.role == User.Role.SUPERVISOR:
-        guardians = Q(is_superuser=False, role=User.Role.GUARDIAN)
+        visible_guardian_ids = guardian_accounts_visible_to_supervisor(
+            queryset.filter(is_superuser=False, role=User.Role.GUARDIAN),
+            user,
+        ).values("pk")
         visible_teacher_ids = teacher_accounts_visible_to_supervisor(
             queryset.filter(is_superuser=False, role=User.Role.TEACHER),
             user,
         ).values("pk")
         return queryset.filter(
-            guardians | Q(pk__in=visible_teacher_ids)
+            Q(pk__in=visible_guardian_ids) | Q(pk__in=visible_teacher_ids)
         )
 
     return queryset.none()
@@ -111,7 +116,7 @@ def can_manage_account(actor, target):
         return can_create_role(actor, target.role)
     if actor.role == User.Role.SUPERVISOR:
         if target.role == User.Role.GUARDIAN:
-            return True
+            return can_view_guardian_account(actor, target)
         if target.role == User.Role.TEACHER:
             return can_edit_teacher_account(actor, target)
     return False

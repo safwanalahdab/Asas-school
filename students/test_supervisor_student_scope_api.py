@@ -72,6 +72,8 @@ class SupervisorStudentScopeApiTests(TestCase):
             cls.old_secondary_current_primary, cls.active_year, cls.active_primary
         )
         cls.unenrolled = cls.student("Unenrolled")
+        cls.historical_only = cls.student("Historical Only")
+        cls.enroll(cls.historical_only, cls.old_year, cls.old_secondary)
         cls.inactive_primary = cls.student("Inactive Primary", is_active=False)
         cls.enroll(cls.inactive_primary, cls.active_year, cls.active_primary)
 
@@ -81,6 +83,9 @@ class SupervisorStudentScopeApiTests(TestCase):
         )
         cls.primary_supervisor = cls.scoped_supervisor(
             "student-primary", ["primary"]
+        )
+        cls.secondary_supervisor = cls.scoped_supervisor(
+            "student-secondary", ["secondary"]
         )
         cls.preparatory_supervisor = cls.scoped_supervisor(
             "student-preparatory", ["preparatory"]
@@ -101,6 +106,7 @@ class SupervisorStudentScopeApiTests(TestCase):
         for user in (
             cls.all_supervisor,
             cls.primary_supervisor,
+            cls.secondary_supervisor,
             cls.preparatory_supervisor,
             cls.multi_supervisor,
             cls.missing_supervisor,
@@ -195,8 +201,20 @@ class SupervisorStudentScopeApiTests(TestCase):
         self.assertIn(str(self.current_primary.pk), ids)
         self.assertIn(str(self.old_secondary_current_primary.pk), ids)
         self.assertIn(str(self.inactive_primary.pk), ids)
+        self.assertIn(str(self.unenrolled.pk), ids)
+        self.assertIn(str(self.historical_only.pk), ids)
         self.assertNotIn(str(self.old_primary_current_preparatory.pk), ids)
-        self.assertNotIn(str(self.unenrolled.pk), ids)
+
+    def test_secondary_scope_sees_secondary_and_unassigned_students(self):
+        ids = self.ids(
+            self.client_for(self.secondary_supervisor).get(
+                "/api/v1/students/students/"
+            )
+        )
+        self.assertIn(str(self.current_secondary.pk), ids)
+        self.assertIn(str(self.unenrolled.pk), ids)
+        self.assertIn(str(self.historical_only.pk), ids)
+        self.assertNotIn(str(self.current_primary.pk), ids)
 
     def test_historical_enrollment_does_not_grant_student_access_but_remains_visible(self):
         client = self.client_for(self.primary_supervisor)
@@ -244,7 +262,7 @@ class SupervisorStudentScopeApiTests(TestCase):
 
         self.assertEqual(client.delete(inside_url).status_code, 400)
 
-    def test_create_is_allowed_but_created_student_is_not_owned(self):
+    def test_created_unassigned_student_is_immediately_visible(self):
         client = self.client_for(self.primary_supervisor)
         created = client.post(
             "/api/v1/students/students/",
@@ -258,20 +276,20 @@ class SupervisorStudentScopeApiTests(TestCase):
         )
         self.assertEqual(created.status_code, 201)
         student_id = created.data["data"]["id"]
-        self.assertNotIn(
+        self.assertIn(
             student_id, self.ids(client.get("/api/v1/students/students/"))
         )
         self.assertEqual(
             client.get(f"/api/v1/students/students/{student_id}/").status_code,
-            404,
+            200,
         )
         self.assertEqual(
             client.patch(
                 f"/api/v1/students/students/{student_id}/",
-                {"first_name": "Blocked"},
+                {"first_name": "Updated"},
                 format="json",
             ).status_code,
-            404,
+            200,
         )
 
     def test_multi_all_and_missing_scope(self):
@@ -291,9 +309,12 @@ class SupervisorStudentScopeApiTests(TestCase):
         self.assertIn(str(self.unenrolled.pk), all_ids)
 
         missing_client = self.client_for(self.missing_supervisor)
-        self.assertEqual(
-            self.rows(missing_client.get("/api/v1/students/students/")), []
+        missing_ids = self.ids(
+            missing_client.get("/api/v1/students/students/")
         )
+        self.assertIn(str(self.unenrolled.pk), missing_ids)
+        self.assertIn(str(self.historical_only.pk), missing_ids)
+        self.assertNotIn(str(self.current_primary.pk), missing_ids)
         self.assertEqual(
             missing_client.get(
                 f"/api/v1/students/students/{self.current_primary.pk}/"
@@ -315,20 +336,46 @@ class SupervisorStudentScopeApiTests(TestCase):
             missing_client.get(
                 f"/api/v1/students/students/{created.data['data']['id']}/"
             ).status_code,
-            404,
+            200,
         )
 
-    def test_no_active_year_fails_closed_only_for_selected_scope(self):
+    def test_no_active_year_fails_closed_for_scoped_and_missing_supervisors(self):
         self.active_year.status = AcademicYear.Status.CLOSED
         self.active_year.save(update_fields=["status"])
         selected = self.client_for(self.primary_supervisor).get(
             "/api/v1/students/students/"
         )
-        self.assertEqual(self.rows(selected), [])
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(self.ids(selected), set())
+        missing = self.client_for(self.missing_supervisor).get(
+            "/api/v1/students/students/"
+        )
+        self.assertEqual(missing.status_code, 200)
+        self.assertEqual(self.ids(missing), set())
+        self.assertEqual(
+            self.client_for(self.primary_supervisor)
+            .get(f"/api/v1/students/students/{self.unenrolled.pk}/")
+            .status_code,
+            404,
+        )
         all_response = self.client_for(self.all_supervisor).get(
             "/api/v1/students/students/"
         )
         self.assertIn(str(self.unenrolled.pk), self.ids(all_response))
+
+    def test_unassigned_student_visibility_transitions_after_active_enrollment(self):
+        student = self.student("Transition Student")
+        primary_client = self.client_for(self.primary_supervisor)
+        secondary_client = self.client_for(self.secondary_supervisor)
+        url = f"/api/v1/students/students/{student.pk}/"
+
+        self.assertEqual(primary_client.get(url).status_code, 200)
+        self.assertEqual(secondary_client.get(url).status_code, 200)
+
+        self.enroll(student, self.active_year, self.active_primary)
+
+        self.assertEqual(primary_client.get(url).status_code, 200)
+        self.assertEqual(secondary_client.get(url).status_code, 404)
 
     def test_search_and_filters_cannot_expand_scope(self):
         client = self.client_for(self.primary_supervisor)
@@ -336,6 +383,7 @@ class SupervisorStudentScopeApiTests(TestCase):
             str(self.current_primary.pk),
             str(self.old_secondary_current_primary.pk),
             str(self.inactive_primary.pk),
+            str(self.historical_only.pk),
         }
         for params in (
             {"search": "Current Secondary"},

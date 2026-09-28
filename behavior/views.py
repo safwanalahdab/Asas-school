@@ -9,6 +9,12 @@ from academics.supervisor_academic_scope import (
     can_access_enrollment,
     filter_queryset_by_stage,
 )
+from academics.teacher_student_scope import (
+    can_teacher_access_enrollment,
+    filter_enrollments_by_teacher_scope,
+    teacher_student_scope_applies,
+)
+from students.models import Enrollment
 
 from .filters import StudentPointEntryFilter
 from .models import BehaviorNote, StudentPointEntry
@@ -19,6 +25,17 @@ from .services import (
     notify_student_point_entry_created,
 )
 from config.api_responses import ArabicApiResponseMixin
+
+
+TEACHER_STUDENT_SCOPE_DENIED = {
+    "code": "TEACHER_STUDENT_SCOPE_DENIED",
+    "detail": "التسجيل المحدد خارج نطاق طلاب المعلّم.",
+}
+
+
+def require_teacher_enrollment_scope(user, enrollment):
+    if not can_teacher_access_enrollment(user, enrollment):
+        raise PermissionDenied(TEACHER_STUDENT_SCOPE_DENIED)
 
 
 class BehaviorNoteViewSet(
@@ -78,10 +95,17 @@ class BehaviorNoteViewSet(
     }
 
     def get_queryset(self):
-        return filter_queryset_by_stage(
+        queryset = filter_queryset_by_stage(
             super().get_queryset(), self.request.user,
             stage_lookup="enrollment__section__grade_level__stage",
         )
+        if teacher_student_scope_applies(self.request.user):
+            enrollments = filter_enrollments_by_teacher_scope(
+                Enrollment.objects.all(),
+                self.request.user,
+            )
+            queryset = queryset.filter(enrollment__in=enrollments)
+        return queryset
 
     @staticmethod
     def _require_enrollment_scope(user, enrollment):
@@ -93,9 +117,11 @@ class BehaviorNoteViewSet(
 
     @transaction.atomic
     def perform_create(self, serializer):
+        enrollment = serializer.validated_data["enrollment"]
         self._require_enrollment_scope(
-            self.request.user, serializer.validated_data["enrollment"]
+            self.request.user, enrollment
         )
+        require_teacher_enrollment_scope(self.request.user, enrollment)
         behavior_note = serializer.save(
             created_by=self.request.user,
         )
@@ -105,6 +131,7 @@ class BehaviorNoteViewSet(
         enrollment = serializer.validated_data.get("enrollment")
         if enrollment is not None and enrollment.pk != serializer.instance.enrollment_id:
             self._require_enrollment_scope(self.request.user, enrollment)
+            require_teacher_enrollment_scope(self.request.user, enrollment)
         serializer.save()
 
 
@@ -177,11 +204,18 @@ class StudentPointEntryViewSet(
     }
 
     def get_queryset(self):
-        return filter_queryset_by_stage(
+        queryset = filter_queryset_by_stage(
             super().get_queryset(),
             self.request.user,
             stage_lookup="enrollment__section__grade_level__stage",
         )
+        if teacher_student_scope_applies(self.request.user):
+            enrollments = filter_enrollments_by_teacher_scope(
+                Enrollment.objects.all(),
+                self.request.user,
+            )
+            queryset = queryset.filter(enrollment__in=enrollments)
+        return queryset
 
     @staticmethod
     def _require_enrollment_scope(user, enrollment):
@@ -193,10 +227,12 @@ class StudentPointEntryViewSet(
 
     @transaction.atomic
     def perform_create(self, serializer):
+        enrollment = serializer.validated_data["enrollment"]
         self._require_enrollment_scope(
             self.request.user,
-            serializer.validated_data["enrollment"],
+            enrollment,
         )
+        require_teacher_enrollment_scope(self.request.user, enrollment)
         point_entry = serializer.save(created_by=self.request.user)
         notify_student_point_entry_created(point_entry)
 
@@ -204,4 +240,5 @@ class StudentPointEntryViewSet(
         enrollment = serializer.validated_data.get("enrollment")
         if enrollment is not None and enrollment.pk != serializer.instance.enrollment_id:
             self._require_enrollment_scope(self.request.user, enrollment)
+            require_teacher_enrollment_scope(self.request.user, enrollment)
         serializer.save()

@@ -276,7 +276,7 @@ class SupervisorStudentProfileScopeTests(TestCase):
         health_selector.assert_not_called()
         enrollment_selector.assert_not_called()
 
-    def test_all_multi_missing_unenrolled_and_no_active_year(self):
+    def test_all_selected_missing_include_unassigned_and_no_active_year_fails_closed(self):
         self.assertEqual(
             self.client_for(self.multi_supervisor).get(self.profile_url()).status_code,
             200,
@@ -288,7 +288,24 @@ class SupervisorStudentProfileScopeTests(TestCase):
             200,
         )
         self.assertEqual(
-            self.client_for(self.missing_supervisor).get(self.profile_url()).status_code,
+            self.client_for(self.missing_supervisor)
+            .get(self.profile_url(self.unenrolled))
+            .status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client_for(self.preparatory_supervisor)
+            .get(self.profile_url(self.unenrolled))
+            .status_code,
+            200,
+        )
+        AcademicYear.objects.filter(pk=self.active_year.pk).update(
+            status=AcademicYear.Status.CLOSED
+        )
+        self.assertEqual(
+            self.client_for(self.preparatory_supervisor)
+            .get(self.profile_url())
+            .status_code,
             404,
         )
         self.assertEqual(
@@ -297,12 +314,9 @@ class SupervisorStudentProfileScopeTests(TestCase):
             .status_code,
             404,
         )
-        AcademicYear.objects.filter(pk=self.active_year.pk).update(
-            status=AcademicYear.Status.CLOSED
-        )
         self.assertEqual(
-            self.client_for(self.preparatory_supervisor)
-            .get(self.profile_url())
+            self.client_for(self.missing_supervisor)
+            .get(self.profile_url(self.unenrolled))
             .status_code,
             404,
         )

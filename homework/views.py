@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import F
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
@@ -138,7 +139,7 @@ class HomeworkViewSet(
                 "detail": "التكليف المحدد خارج نطاق مراحل الموجّه أو غير متسق أكاديميًا.",
             })
 
-    def validate_teacher_assignment_access(self, serializer):
+    def validate_teacher_assignment_write_access(self, teacher_assignment):
         user = self.request.user
 
         if user.is_superuser:
@@ -146,18 +147,6 @@ class HomeworkViewSet(
 
         if user.role != User.Role.TEACHER:
             return
-
-        teacher_assignment = serializer.validated_data.get(
-            "teacher_assignment",
-        )
-
-        if (
-            teacher_assignment is None
-            and serializer.instance is not None
-        ):
-            teacher_assignment = (
-                serializer.instance.teacher_assignment
-            )
 
         if teacher_assignment.teacher_id != user.id:
             raise PermissionDenied(
@@ -168,6 +157,44 @@ class HomeworkViewSet(
                         "لإنشاء أو تعديل الواجب."
                     ),
                 }
+            )
+
+        if (
+            teacher_assignment.end_date is not None
+            and teacher_assignment.end_date < timezone.localdate()
+        ):
+            raise PermissionDenied(
+                {
+                    "code": "HOMEWORK_ASSIGNMENT_ENDED",
+                    "detail": (
+                        "لا يمكنك إنشاء أو تعديل أو حذف واجب "
+                        "مرتبط بتكليف معلّم منتهٍ."
+                    ),
+                }
+            )
+
+    def validate_teacher_assignment_access(self, serializer):
+        instance = serializer.instance
+
+        if instance is not None:
+            self.validate_teacher_assignment_write_access(
+                instance.teacher_assignment,
+            )
+
+        teacher_assignment = serializer.validated_data.get(
+            "teacher_assignment",
+        )
+
+        if teacher_assignment is None:
+            return
+
+        if (
+            instance is None
+            or teacher_assignment.pk
+            != instance.teacher_assignment_id
+        ):
+            self.validate_teacher_assignment_write_access(
+                teacher_assignment,
             )
 
     @transaction.atomic
@@ -189,3 +216,9 @@ class HomeworkViewSet(
         )
 
         serializer.save()
+
+    def perform_destroy(self, instance):
+        self.validate_teacher_assignment_write_access(
+            instance.teacher_assignment,
+        )
+        super().perform_destroy(instance)

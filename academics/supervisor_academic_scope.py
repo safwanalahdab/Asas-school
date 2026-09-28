@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 
 from academics.models import AcademicYear, SupervisorScope
 
@@ -75,12 +75,10 @@ def get_active_academic_year():
 
 
 def filter_students_by_supervisor_scope(queryset, user):
-    """Student scope follows only the enrollment in the active academic year."""
+    """Scope active-year placements while keeping current-year unassigned visible."""
     scope = supervisor_academic_scope_for(user)
     if not scope.applies or scope.allows_all_stages:
         return queryset
-    if not scope.scope_type:
-        return queryset.none()
 
     active_year = get_active_academic_year()
     if active_year is None:
@@ -89,14 +87,22 @@ def filter_students_by_supervisor_scope(queryset, user):
     # Imported lazily so the academics policy does not create a model import cycle.
     from students.models import Enrollment
 
+    active_enrollment = Enrollment.objects.filter(
+        student_id=OuterRef("pk"),
+        academic_year=active_year,
+    )
     matching_enrollment = Enrollment.objects.filter(
         student_id=OuterRef("pk"),
         academic_year=active_year,
         section__grade_level__stage__in=scope.stages,
     )
     return queryset.annotate(
+        _supervisor_has_active_enrollment=Exists(active_enrollment),
         _supervisor_has_active_stage_enrollment=Exists(matching_enrollment)
-    ).filter(_supervisor_has_active_stage_enrollment=True)
+    ).filter(
+        Q(_supervisor_has_active_stage_enrollment=True)
+        | Q(_supervisor_has_active_enrollment=False)
+    )
 
 
 def can_access_grade_level(user, grade_level):
@@ -114,6 +120,29 @@ def can_access_enrollment(user, enrollment):
 def can_access_student(user, student):
     return filter_students_by_supervisor_scope(
         type(student).objects.filter(pk=student.pk), user
+    ).exists()
+
+
+def can_create_enrollment_for_student(user, student):
+    """Allow unplaced students, but reject active-year placements outside scope."""
+    scope = supervisor_academic_scope_for(user)
+    if not scope.applies or scope.allows_all_stages:
+        return True
+    if not scope.scope_type:
+        return False
+
+    active_year = get_active_academic_year()
+    if active_year is None:
+        return True
+
+    # Imported lazily so the academics policy does not create a model import cycle.
+    from students.models import Enrollment
+
+    return not Enrollment.objects.filter(
+        student=student,
+        academic_year=active_year,
+    ).exclude(
+        section__grade_level__stage__in=scope.stages,
     ).exists()
 
 
