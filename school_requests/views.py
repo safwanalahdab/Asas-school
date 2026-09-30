@@ -16,12 +16,7 @@ from rest_framework.viewsets import GenericViewSet
 from .filters import SchoolRequestFilter
 
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
-from academics.supervisor_academic_scope import (
-    filter_students_by_supervisor_scope,
-    supervisor_academic_scope_for,
-)
 from config.api_responses import ArabicApiResponseMixin
-from students.models import Student
 
 from .models import SchoolRequest
 from .permissions import WebGuardianSchoolRequestPermission
@@ -30,6 +25,7 @@ from .serializers import (
     SchoolRequestSerializer,
 )
 from .services import notify_school_request_answered
+from .supervisor_scope import filter_school_requests_by_supervisor_scope
 
 
 User = get_user_model()
@@ -122,12 +118,10 @@ class SchoolRequestViewSet(
             )
 
         if user.role == User.Role.SUPERVISOR and not user.is_superuser:
-            if supervisor_academic_scope_for(user).allows_all_stages:
-                return queryset
-            eligible_students = filter_students_by_supervisor_scope(
-                Student.objects.all(), user
-            ).values("pk")
-            return queryset.filter(student_id__in=eligible_students)
+            return filter_school_requests_by_supervisor_scope(
+                queryset,
+                user,
+            )
 
         return queryset
 

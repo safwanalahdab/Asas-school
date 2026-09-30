@@ -135,9 +135,7 @@ class SchoolRequestSupervisorScopeTests(TestCase):
         expected = {str(self.requests[key].pk) for key in ("primary", "preparatory")}
         self.assertEqual(self.ids(self.client.get(self.url)), expected)
         self.scope()
-        self.assertEqual(self.ids(self.client.get(self.url)), {
-            str(item.pk) for item in self.requests.values()
-        })
+        self.assertEqual(self.ids(self.client.get(self.url)), expected)
         self.scope("primary")
         self.active_year.status = AcademicYear.Status.CLOSED
         self.active_year.save(update_fields=["status"])
