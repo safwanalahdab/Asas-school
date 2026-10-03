@@ -85,6 +85,7 @@ PERMISSION_CATALOG = tuple(
         ("grades.create_grade_wide_assessment", "إنشاء تقييم لجميع شعب الصف"),
         ("grades.delete_assessment", "حذف تقييم"),
         ("grades.publish_grades", "نشر العلامات"),
+        ("grades.publish_assessment_schedule", "نشر مواعيد الامتحانات"),
         ("grades.view_assessment", "عرض التقييمات"),
         ("grades.view_studentscore", "عرض علامات الطلاب"),
         ("homework.add_homework", "إضافة واجب"),

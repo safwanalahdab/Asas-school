@@ -184,6 +184,120 @@ def resolve_assessment_section(*, assessment, section=None):
     return links[0]
 
 
+def _assessment_schedule_result(link):
+    return {
+        "assessment": link.assessment_id,
+        "section": link.section_id,
+        "schedule_status": link.schedule_status,
+        "schedule_published_by": link.schedule_published_by_id,
+        "schedule_published_at": link.schedule_published_at,
+        "result_status": link.status,
+    }
+
+
+@transaction.atomic
+def publish_assessment_schedule(*, assessment, section, actor):
+    require_assessment(actor, assessment)
+    require_section(actor, section)
+    link = (
+        AssessmentSection.objects.select_for_update()
+        .select_related("assessment__grade_subject", "section")
+        .filter(assessment=assessment, section=section)
+        .first()
+    )
+    if link is None:
+        raise ValidationError({
+            "code": "ASSESSMENT_SECTION_MISMATCH",
+            "detail": "التقييم غير مرتبط بالشعبة المحددة.",
+        })
+    ensure_actor_can_manage_scope(
+        actor=actor,
+        section=link.section,
+        grade_subject=link.assessment.grade_subject,
+    )
+    if link.schedule_status == AssessmentSection.ScheduleStatus.PUBLISHED:
+        return _assessment_schedule_result(link)
+
+    link.schedule_status = AssessmentSection.ScheduleStatus.PUBLISHED
+    link.schedule_published_by = actor
+    link.schedule_published_at = timezone.now()
+    link.full_clean()
+    link.save(update_fields=[
+        "schedule_status", "schedule_published_by",
+        "schedule_published_at", "updated_at",
+    ])
+    record_audit_event(
+        actor=actor,
+        module=AuditLog.Module.GRADES,
+        action=AuditLog.Action.PUBLISH,
+        message=(
+            f"نشر {get_actor_display(actor)} موعد الامتحان "
+            f"{link.assessment.title} للشعبة {link.section}."
+        ),
+        target=link,
+        metadata={
+            "assessment": str(link.assessment_id),
+            "section": str(link.section_id),
+            "schedule_status": link.schedule_status,
+        },
+    )
+    return _assessment_schedule_result(link)
+
+
+@transaction.atomic
+def unpublish_assessment_schedule(*, assessment, section, actor):
+    require_assessment(actor, assessment)
+    require_section(actor, section)
+    link = (
+        AssessmentSection.objects.select_for_update()
+        .select_related("assessment__grade_subject", "section")
+        .filter(assessment=assessment, section=section)
+        .first()
+    )
+    if link is None:
+        raise ValidationError({
+            "code": "ASSESSMENT_SECTION_MISMATCH",
+            "detail": "التقييم غير مرتبط بالشعبة المحددة.",
+        })
+    ensure_actor_can_manage_scope(
+        actor=actor,
+        section=link.section,
+        grade_subject=link.assessment.grade_subject,
+    )
+    if link.schedule_status == AssessmentSection.ScheduleStatus.DRAFT:
+        return _assessment_schedule_result(link)
+    if link.status == AssessmentSection.Status.PUBLISHED:
+        raise ValidationError({
+            "code": "ASSESSMENT_SCHEDULE_UNPUBLISH_NOT_ALLOWED",
+            "detail": "لا يمكن إلغاء نشر موعد امتحان نُشرت نتائجه.",
+        })
+
+    link.schedule_status = AssessmentSection.ScheduleStatus.DRAFT
+    link.schedule_published_by = None
+    link.schedule_published_at = None
+    link.full_clean()
+    link.save(update_fields=[
+        "schedule_status", "schedule_published_by",
+        "schedule_published_at", "updated_at",
+    ])
+    record_audit_event(
+        actor=actor,
+        module=AuditLog.Module.GRADES,
+        action=AuditLog.Action.CANCEL,
+        message=(
+            f"ألغى {get_actor_display(actor)} نشر موعد الامتحان "
+            f"{link.assessment.title} للشعبة {link.section}."
+        ),
+        target=link,
+        metadata={
+            "assessment": str(link.assessment_id),
+            "section": str(link.section_id),
+            "schedule_status": link.schedule_status,
+        },
+    )
+    return _assessment_schedule_result(link)
+
+
 def _validate_score(*, assessment, section, enrollment, score):
     if (
         enrollment.academic_year_id != section.academic_year_id

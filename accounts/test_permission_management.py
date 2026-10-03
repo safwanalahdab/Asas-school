@@ -478,3 +478,44 @@ class WebMePermissionTests(PermissionApiTestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("permissions", response.data["data"]["user"])
+
+    def test_login_and_me_do_not_restore_manually_removed_permission(self):
+        permission_code = "grades.publish_assessment_schedule"
+        admin = self.create_user("permission-removal-admin", User.Role.SCHOOL_ADMIN)
+        supervisor = self.create_user(
+            "permission-removal-supervisor",
+            User.Role.SUPERVISOR,
+        )
+        self.assertTrue(supervisor.has_perm(permission_code))
+
+        self.authenticate(admin)
+        remaining_permissions = [
+            code
+            for code in direct_business_permission_codes(supervisor)
+            if code != permission_code
+        ]
+        removal = self.client.put(
+            self.user_permissions_url(supervisor),
+            {"permissions": remaining_permissions},
+            format="json",
+        )
+        self.assertEqual(removal.status_code, 200)
+
+        self.client.force_authenticate(user=None)
+        login = self.client.post(
+            "/api/v1/auth/web/login/",
+            {"identifier": supervisor.username, "password": self.password},
+            format="json",
+        )
+        self.assertEqual(login.status_code, 200)
+
+        me = self.client.get(self.url)
+        self.assertEqual(me.status_code, 200)
+        self.assertNotIn(permission_code, me.data["data"]["permissions"])
+        supervisor.refresh_from_db()
+        self.assertFalse(
+            supervisor.user_permissions.filter(
+                content_type__app_label="grades",
+                codename="publish_assessment_schedule",
+            ).exists()
+        )

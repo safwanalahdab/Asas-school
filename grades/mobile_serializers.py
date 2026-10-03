@@ -90,3 +90,89 @@ class MobileGradesErrorSerializer(serializers.Serializer):
     message = serializers.CharField()
     errors = serializers.JSONField(required=False)
     meta = MobileGradesMetaSerializer()
+
+
+class MobileExamsQuerySerializer(serializers.Serializer):
+    view = serializers.ChoiceField(
+        choices=("upcoming", "past", "all"), default="upcoming"
+    )
+    date_from = serializers.DateField(required=False)
+    date_to = serializers.DateField(required=False)
+    term = serializers.UUIDField(required=False)
+    subject = serializers.UUIDField(required=False)
+    page = serializers.IntegerField(required=False, default=1, min_value=1)
+    page_size = serializers.IntegerField(
+        required=False, default=20, min_value=1, max_value=100
+    )
+
+    def validate(self, attrs):
+        date_from = attrs.get("date_from")
+        date_to = attrs.get("date_to")
+        if date_from and date_to and date_from > date_to:
+            raise serializers.ValidationError({
+                "date_to": "يجب أن يكون تاريخ النهاية مساويًا لتاريخ البداية أو بعده."
+            })
+        return attrs
+
+
+class MobileExamSubjectSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+
+
+class MobileExamTermSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    number = serializers.IntegerField()
+    number_display = serializers.CharField()
+
+
+class MobileExamSectionSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    name = serializers.CharField()
+
+
+class MobileExamSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    title = serializers.CharField()
+    subject = MobileExamSubjectSerializer()
+    assessment_date = serializers.DateField()
+    temporal_status = serializers.ChoiceField(choices=("upcoming", "past"))
+    term = MobileExamTermSerializer()
+    section = MobileExamSectionSerializer()
+    max_score = serializers.DecimalField(max_digits=7, decimal_places=2)
+
+
+class MobileExamsDataSerializer(serializers.Serializer):
+    student = MobileGradeStudentSerializer()
+    academic_year = MobileGradeAcademicYearSerializer(allow_null=True)
+    exams = MobileExamSerializer(many=True)
+
+
+class MobileExamsPaginationSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    page = serializers.IntegerField()
+    page_size = serializers.IntegerField()
+    total_pages = serializers.IntegerField()
+
+
+class MobileExamsMetaSerializer(serializers.Serializer):
+    requester_role = serializers.JSONField(allow_null=True)
+    pagination = MobileExamsPaginationSerializer()
+
+
+class MobileExamsResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField(default=True)
+    code = serializers.CharField(default="MOBILE_CHILD_EXAMS_RETRIEVED")
+    message = serializers.CharField()
+    data = MobileExamsDataSerializer()
+    meta = MobileExamsMetaSerializer()
+
+
+class MobileExamsErrorSerializer(serializers.Serializer):
+    success = serializers.BooleanField(default=False)
+    code = serializers.CharField()
+    message = serializers.CharField()
+    errors = serializers.JSONField(required=False)
+    meta = MobileGradesMetaSerializer()

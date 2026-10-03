@@ -77,6 +77,19 @@ class RoleTemplateBusinessContractTests(TestCase):
     }
     audit_log_permission = "audit_logs.view_auditlog"
     student_import_permission = "students.import_students"
+    assessment_schedule_permission = "grades.publish_assessment_schedule"
+
+    def test_assessment_schedule_publish_defaults_to_admin_and_supervisor(self):
+        for role in (User.Role.SCHOOL_ADMIN, User.Role.SUPERVISOR):
+            with self.subTest(role=role):
+                self.assertIn(
+                    self.assessment_schedule_permission,
+                    ROLE_PERMISSION_TEMPLATES[role],
+                )
+        self.assertNotIn(
+            self.assessment_schedule_permission,
+            ROLE_PERMISSION_TEMPLATES[User.Role.TEACHER],
+        )
 
     def test_student_import_defaults_are_limited_to_admin_and_secretariat(self):
         self.assertIn(

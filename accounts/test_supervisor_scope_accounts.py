@@ -86,6 +86,15 @@ class SupervisorScopeAccountsTests(TestCase):
             ["primary", "preparatory"],
         )
 
+    def test_create_supervisor_grants_assessment_schedule_publish_permission(self):
+        response = self.create_supervisor(username="schedule-publish-supervisor")
+
+        self.assertEqual(response.status_code, 201)
+        supervisor = User.objects.get(pk=response.data["data"]["id"])
+        self.assertTrue(
+            supervisor.has_perm("grades.publish_assessment_schedule")
+        )
+
     def test_create_supervisor_requires_explicit_valid_scope(self):
         missing = self.client.post(
             self.users_url,
@@ -224,6 +233,34 @@ class SupervisorScopeAccountsTests(TestCase):
         )
         self.assertEqual(demoted.status_code, 200)
         self.assertFalse(SupervisorScope.objects.filter(supervisor=teacher).exists())
+
+    def test_transition_to_supervisor_grants_assessment_schedule_publish_permission(self):
+        teacher = User.objects.create_user(
+            username="schedule-publish-transition-teacher",
+            role=User.Role.TEACHER,
+        )
+        self.assertNotIn(
+            "grades.publish_assessment_schedule",
+            direct_business_permission_codes(teacher),
+        )
+
+        response = self.client.patch(
+            f"{self.users_url}{teacher.pk}/",
+            {
+                "role": User.Role.SUPERVISOR,
+                "supervisor_scope": {"scope_type": "all", "stages": []},
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        teacher.refresh_from_db()
+        self.assertEqual(teacher.role, User.Role.SUPERVISOR)
+        self.assertTrue(SupervisorScope.objects.filter(supervisor=teacher).exists())
+        self.assertIn(
+            "grades.publish_assessment_schedule",
+            direct_business_permission_codes(teacher),
+        )
 
     def test_django_admin_role_is_read_only_for_existing_users(self):
         model_admin = CustomUserAdmin(User, AdminSite())

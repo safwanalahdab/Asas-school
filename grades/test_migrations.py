@@ -69,3 +69,70 @@ class PublishedGradeCorrectionPermissionMigrationTests(TransactionTestCase):
             if User.objects.get(pk=user_id).user_permissions.filter(pk=permission.pk).exists()
         }
         self.assertEqual(granted_roles, {"school_admin", "supervisor"})
+
+
+class AssessmentSchedulePermissionMigrationTests(TransactionTestCase):
+    migrate_from = ("grades", "0006_assessmentsection_schedule_publishing")
+    migrate_to = ("grades", "0007_assessment_publish_schedule_permission")
+
+    def setUp(self):
+        super().setUp()
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_from])
+        old_apps = executor.loader.project_state([self.migrate_from]).apps
+        ContentType = old_apps.get_model("contenttypes", "ContentType")
+        Permission = old_apps.get_model("auth", "Permission")
+        User = old_apps.get_model("accounts", "User")
+
+        assessment_content_type, _ = ContentType.objects.get_or_create(
+            app_label="grades",
+            model="assessment",
+        )
+        Permission.objects.filter(
+            content_type=assessment_content_type,
+            codename="publish_assessment_schedule",
+        ).delete()
+        existing_permission, _ = Permission.objects.get_or_create(
+            content_type=assessment_content_type,
+            codename="view_assessment",
+            defaults={"name": "Can view assessment"},
+        )
+
+        self.user_ids = {}
+        for role in ("school_admin", "supervisor", "teacher", "accountant"):
+            user = User.objects.create(username=f"schedule-existing-{role}", role=role)
+            user.user_permissions.add(existing_permission)
+            self.user_ids[role] = user.pk
+        self.existing_permission_pk = existing_permission.pk
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([self.migrate_to])
+        self.apps = executor.loader.project_state([self.migrate_to]).apps
+
+    def tearDown(self):
+        MigrationExecutor(connection).migrate(
+            MigrationExecutor(connection).loader.graph.leaf_nodes()
+        )
+        super().tearDown()
+
+    def test_permission_is_created_and_added_without_replacing_existing_permissions(self):
+        User = self.apps.get_model("accounts", "User")
+        Permission = self.apps.get_model("auth", "Permission")
+        permission = Permission.objects.get(
+            content_type__app_label="grades",
+            content_type__model="assessment",
+            codename="publish_assessment_schedule",
+        )
+
+        for role, user_id in self.user_ids.items():
+            user = User.objects.get(pk=user_id)
+            with self.subTest(role=role):
+                self.assertEqual(
+                    user.user_permissions.filter(pk=permission.pk).exists(),
+                    role in {"school_admin", "supervisor"},
+                )
+                self.assertTrue(
+                    user.user_permissions.filter(
+                        pk=self.existing_permission_pk
+                    ).exists()
+                )

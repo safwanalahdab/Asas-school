@@ -5,6 +5,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.contrib import admin
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.test import TestCase, override_settings
 from django.test import RequestFactory
 from django.utils import timezone
@@ -47,6 +48,77 @@ class GradesRefactorTests(TestCase):
 
     def assessment(self, section=None, when=date(2026, 2, 1)):
         return create_assessment(section=section or self.a, grade_subject=self.plan, term=self.term, title="مذاكرة 1", max_score=Decimal("20"), assessment_date=when, actor=self.admin)
+
+    def test_assessment_schedule_publish_defaults(self):
+        link = self.assessment().assessment_sections.get()
+        self.assertEqual(link.schedule_status, AssessmentSection.ScheduleStatus.DRAFT)
+        self.assertIsNone(link.schedule_published_by)
+        self.assertIsNone(link.schedule_published_at)
+
+    def test_assessment_schedule_draft_rejects_publisher_only(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_published_by = self.admin
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+    def test_assessment_schedule_draft_rejects_timestamp_only(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_published_at = timezone.now()
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+    def test_assessment_schedule_draft_rejects_all_publish_data(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_published_by = self.admin
+        link.schedule_published_at = timezone.now()
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+    def test_assessment_schedule_published_rejects_missing_publish_data(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_status = AssessmentSection.ScheduleStatus.PUBLISHED
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+    def test_assessment_schedule_published_rejects_timestamp_only(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_status = AssessmentSection.ScheduleStatus.PUBLISHED
+        link.schedule_published_at = timezone.now()
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+    def test_assessment_schedule_published_rejects_publisher_only(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_status = AssessmentSection.ScheduleStatus.PUBLISHED
+        link.schedule_published_by = self.admin
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+    def test_assessment_schedule_published_accepts_all_publish_data(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_status = AssessmentSection.ScheduleStatus.PUBLISHED
+        link.schedule_published_by = self.admin
+        link.schedule_published_at = timezone.now()
+        link.full_clean()
+
+    def test_assessment_schedule_publish_is_independent_from_results(self):
+        link = self.assessment().assessment_sections.get()
+        link.schedule_status = AssessmentSection.ScheduleStatus.PUBLISHED
+        link.schedule_published_by = self.admin
+        link.schedule_published_at = timezone.now()
+        link.status = AssessmentSection.Status.DRAFT
+        link.full_clean()
+        self.assertEqual(link.status, AssessmentSection.Status.DRAFT)
+
+    def test_existing_results_publish_constraint_is_unchanged(self):
+        link = self.assessment().assessment_sections.get()
+        link.status = AssessmentSection.Status.PUBLISHED
+        with self.assertRaises(DjangoValidationError):
+            link.full_clean()
+
+        link.published_by = self.admin
+        link.published_at = timezone.now()
+        link.full_clean()
 
     def test_single_and_grade_wide_creation(self):
         single = self.assessment()

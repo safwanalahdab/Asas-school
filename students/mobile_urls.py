@@ -49,6 +49,10 @@ urlpatterns = [
         include("grades.mobile_urls"),
     ),
     path(
+        "children/<uuid:student_id>/exams/",
+        include("grades.mobile_exam_urls"),
+    ),
+    path(
         "children/<uuid:student_id>/attendance/",
         include("attendance.mobile_urls"),
     ),

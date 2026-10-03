@@ -20,10 +20,18 @@ from .models import (
 class AssessmentSectionSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source="section.name", read_only=True)
     published_by_username = serializers.CharField(source="published_by.username", read_only=True, allow_null=True)
+    schedule_published_by_username = serializers.CharField(
+        source="schedule_published_by.username", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = AssessmentSection
-        fields = ("id", "section", "name", "status", "published_by", "published_by_username", "published_at")
+        fields = (
+            "id", "section", "name",
+            "schedule_status", "schedule_published_by",
+            "schedule_published_by_username", "schedule_published_at",
+            "status", "published_by", "published_by_username", "published_at",
+        )
         read_only_fields = fields
 
 
@@ -372,6 +380,30 @@ class PublishResultSerializer(
         read_only=True,
     )
     skipped_future_count = serializers.IntegerField(read_only=True)
+
+
+class AssessmentScheduleActionSerializer(serializers.Serializer):
+    assessment = serializers.PrimaryKeyRelatedField(
+        queryset=Assessment.objects.all(),
+    )
+    section = serializers.PrimaryKeyRelatedField(
+        queryset=Section.objects.all(),
+    )
+
+
+class AssessmentScheduleResultSerializer(serializers.Serializer):
+    assessment = serializers.UUIDField(read_only=True)
+    section = serializers.UUIDField(read_only=True)
+    schedule_status = serializers.ChoiceField(
+        choices=AssessmentSection.ScheduleStatus.choices,
+        read_only=True,
+    )
+    schedule_published_by = serializers.UUIDField(read_only=True, allow_null=True)
+    schedule_published_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    result_status = serializers.ChoiceField(
+        choices=AssessmentSection.Status.choices,
+        read_only=True,
+    )
 
 
 class StudentResultsQuerySerializer(

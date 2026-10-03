@@ -8,7 +8,7 @@ from django.db.models import (
 from django.utils import timezone
 
 from django_filters.rest_framework import DjangoFilterBackend
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from rest_framework import (
     mixins,
@@ -16,7 +16,7 @@ from rest_framework import (
     viewsets,
 )
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.filters import (
     OrderingFilter,
     SearchFilter,
@@ -42,6 +42,8 @@ from .selectors import (
 )
 from .serializers import (
     AssessmentScoresSheetSerializer,
+    AssessmentScheduleActionSerializer,
+    AssessmentScheduleResultSerializer,
     AssessmentSerializer,
     BulkAssessmentScoresSerializer,
     CreateAssessmentSerializer,
@@ -58,10 +60,12 @@ from .services import (
     create_assessments_for_grade,
     delete_assessment,
     ensure_actor_can_manage_scope,
+    publish_assessment_schedule,
     publish_grade_assessments,
     publish_section_assessments,
     resolve_assessment_section,
     save_assessment_scores_bulk,
+    unpublish_assessment_schedule,
     update_assessment,
 )
 
@@ -89,7 +93,11 @@ class AssessmentViewSet(
             "term__academic_year",
             "created_by",
         )
-        .prefetch_related("assessment_sections__section", "assessment_sections__published_by")
+        .prefetch_related(
+            "assessment_sections__section",
+            "assessment_sections__published_by",
+            "assessment_sections__schedule_published_by",
+        )
         .all()
     )
 
@@ -111,6 +119,8 @@ class AssessmentViewSet(
         "bulk_scores": "grades.change_studentscore",
         "publish_section": "grades.publish_grades",
         "publish_grade": "grades.publish_grades",
+        "publish_schedule": "grades.publish_assessment_schedule",
+        "unpublish_schedule": "grades.publish_assessment_schedule",
         "student_results": "grades.view_studentscore",
     }
 
@@ -190,6 +200,14 @@ class AssessmentViewSet(
             "GRADE_RESULTS_PUBLISHED",
             "تم اعتماد ونشر نتائج الصف بنجاح.",
         ),
+        "publish_schedule": (
+            "ASSESSMENT_SCHEDULE_PUBLISHED",
+            "تم نشر موعد الامتحان بنجاح.",
+        ),
+        "unpublish_schedule": (
+            "ASSESSMENT_SCHEDULE_UNPUBLISHED",
+            "تم إلغاء نشر موعد الامتحان بنجاح.",
+        ),
         "student_results": (
             "STUDENT_RESULTS_RETRIEVED",
             "تم جلب نتائج الطالب بنجاح.",
@@ -208,6 +226,9 @@ class AssessmentViewSet(
 
         if self.action == "bulk_scores":
             return BulkAssessmentScoresSerializer
+
+        if self.action in ("publish_schedule", "unpublish_schedule"):
+            return AssessmentScheduleActionSerializer
 
         if self.action == "publish_section":
             return PublishSectionSerializer
@@ -683,6 +704,64 @@ class AssessmentViewSet(
         return Response(
             response_serializer.data,
         )
+
+    def _schedule_action_scope(self, validated_data):
+        assessment = validated_data["assessment"]
+        if not self.get_queryset().filter(pk=assessment.pk).exists():
+            raise NotFound()
+        require_assessment(self.request.user, assessment)
+        require_section(self.request.user, validated_data["section"])
+        return assessment
+
+    @extend_schema(
+        description=(
+            "ينشر موعد امتحان تقييم لشعبة محددة، ولا يتطلب وجود علامات. "
+            "نشر الموعد مستقل عن نشر النتائج ويسمح بموعد امتحان مستقبلي."
+        ),
+        request=AssessmentScheduleActionSerializer,
+        responses={
+            status.HTTP_200_OK: AssessmentScheduleResultSerializer,
+            status.HTTP_400_BAD_REQUEST: OpenApiResponse(description="طلب غير صالح أو التقييم غير مرتبط بالشعبة."),
+            status.HTTP_401_UNAUTHORIZED: OpenApiResponse(description="المصادقة مطلوبة."),
+            status.HTTP_403_FORBIDDEN: OpenApiResponse(description="الصلاحية أو نطاق العمل غير كافيين."),
+            status.HTTP_404_NOT_FOUND: OpenApiResponse(description="التقييم غير موجود ضمن نطاق المستخدم."),
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="publish-schedule")
+    def publish_schedule(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self._schedule_action_scope(serializer.validated_data)
+        result = publish_assessment_schedule(
+            actor=request.user,
+            **serializer.validated_data,
+        )
+        return Response(AssessmentScheduleResultSerializer(result).data)
+
+    @extend_schema(
+        description=(
+            "يلغي نشر موعد امتحان تقييم لشعبة محددة. لا يمكن إلغاء النشر "
+            "بعد نشر نتائج التقييم في الشعبة."
+        ),
+        request=AssessmentScheduleActionSerializer,
+        responses={
+            status.HTTP_200_OK: AssessmentScheduleResultSerializer,
+            status.HTTP_400_BAD_REQUEST: OpenApiResponse(description="طلب غير صالح، أو نُشرت نتائج الشعبة بالفعل."),
+            status.HTTP_401_UNAUTHORIZED: OpenApiResponse(description="المصادقة مطلوبة."),
+            status.HTTP_403_FORBIDDEN: OpenApiResponse(description="الصلاحية أو نطاق العمل غير كافيين."),
+            status.HTTP_404_NOT_FOUND: OpenApiResponse(description="التقييم غير موجود ضمن نطاق المستخدم."),
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="unpublish-schedule")
+    def unpublish_schedule(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self._schedule_action_scope(serializer.validated_data)
+        result = unpublish_assessment_schedule(
+            actor=request.user,
+            **serializer.validated_data,
+        )
+        return Response(AssessmentScheduleResultSerializer(result).data)
 
     @extend_schema(
         parameters=[

@@ -23,6 +23,7 @@ class Assessment(models.Model):
         permissions = [
             ("correct_published_grades", "تصحيح العلامات المنشورة"),
             ("publish_grades", "نشر العلامات"),
+            ("publish_assessment_schedule", "نشر مواعيد الامتحانات"),
             ("create_grade_wide_assessment", "إنشاء تقييم لجميع شعب الصف"),
         ]
         db_table = "grades_assessment"
@@ -51,12 +52,19 @@ class AssessmentSection(models.Model):
         DRAFT = "draft", "مسودة"
         PUBLISHED = "published", "منشور"
 
+    class ScheduleStatus(models.TextChoices):
+        DRAFT = "draft", "مسودة"
+        PUBLISHED = "published", "منشور"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE, related_name="assessment_sections")
     section = models.ForeignKey(Section, on_delete=models.PROTECT, related_name="assessment_sections")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="published_assessment_sections", null=True, blank=True)
     published_at = models.DateTimeField(null=True, blank=True)
+    schedule_status = models.CharField(max_length=20, choices=ScheduleStatus.choices, default=ScheduleStatus.DRAFT)
+    schedule_published_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="schedule_published_assessment_sections", null=True, blank=True)
+    schedule_published_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -69,8 +77,15 @@ class AssessmentSection(models.Model):
                 condition=(models.Q(status="draft", published_by__isnull=True, published_at__isnull=True) | models.Q(status="published", published_by__isnull=False, published_at__isnull=False)),
                 name="gr_assess_sec_publish_consistent",
             ),
+            models.CheckConstraint(
+                condition=(models.Q(schedule_status="draft", schedule_published_by__isnull=True, schedule_published_at__isnull=True) | models.Q(schedule_status="published", schedule_published_by__isnull=False, schedule_published_at__isnull=False)),
+                name="gr_assess_sched_consistent",
+            ),
         ]
-        indexes = [models.Index(fields=["section", "status"], name="gr_assess_sec_st_idx")]
+        indexes = [
+            models.Index(fields=["section", "status"], name="gr_assess_sec_st_idx"),
+            models.Index(fields=["section", "schedule_status"], name="gr_assess_sec_sched_idx"),
+        ]
 
     def clean(self):
         errors = {}
@@ -85,6 +100,12 @@ class AssessmentSection(models.Model):
         published = self.status == self.Status.PUBLISHED
         if published != bool(self.published_by_id and self.published_at):
             errors["status"] = "بيانات نشر التقييم في الشعبة غير متسقة."
+        if self.schedule_status == self.ScheduleStatus.DRAFT:
+            if self.schedule_published_by_id is not None or self.schedule_published_at is not None:
+                errors["schedule_status"] = "بيانات نشر موعد الامتحان في الشعبة غير متسقة."
+        elif self.schedule_status == self.ScheduleStatus.PUBLISHED:
+            if self.schedule_published_by_id is None or self.schedule_published_at is None:
+                errors["schedule_status"] = "بيانات نشر موعد الامتحان في الشعبة غير متسقة."
         if errors:
             raise ValidationError(errors)
 

@@ -31,11 +31,11 @@ class AssessmentAdmin(admin.ModelAdmin):
 @admin.register(AssessmentSection)
 class AssessmentSectionAdmin(admin.ModelAdmin):
     form = FullCleanModelForm
-    list_display = ("assessment", "section", "status", "published_by", "published_at")
-    list_filter = ("status", "section__academic_year", "section__grade_level", "section")
+    list_display = ("assessment", "section", "schedule_status", "schedule_published_by", "schedule_published_at", "status", "published_by", "published_at")
+    list_filter = ("schedule_status", "status", "section__academic_year", "section__grade_level", "section")
     search_fields = ("assessment__title", "section__name")
-    list_select_related = ("assessment__grade_subject", "section", "published_by")
-    readonly_fields = ("id", "created_at", "updated_at")
+    list_select_related = ("assessment__grade_subject", "section", "schedule_published_by", "published_by")
+    readonly_fields = ("id", "schedule_status", "schedule_published_by", "schedule_published_at", "created_at", "updated_at")
 
     def save_model(self, request, obj, form, change):
         obj.full_clean()
