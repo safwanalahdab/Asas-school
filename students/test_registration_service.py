@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.db import IntegrityError
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from accounts.models import User
@@ -66,12 +67,22 @@ class RegisterStudentServiceTests(TestCase):
             guardian_data=self.guardian_data,
         )
 
+        national_id = self.guardian_data["national_id"]
         account = result["guardian_account"]
-        guardian = User.objects.get(username=self.guardian_data["national_id"])
+        guardian = User.objects.get(username=national_id)
         link = GuardianStudent.objects.get(student=result["student"])
         self.assertEqual(account["status"], "created")
         self.assertEqual(account["username"], guardian.username)
-        self.assertIsNotNone(account["temporary_password"])
+        self.assertEqual(guardian.username, "01234567890")
+        self.assertEqual(account["temporary_password"], "01234567890")
+        self.assertTrue(guardian.check_password("01234567890"))
+        self.assertFalse(guardian.check_password("1234567890"))
+        self.assertNotEqual(guardian.password, national_id)
+        self.assertAlmostEqual(
+            guardian.temporary_password_expires_at,
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
+        )
         self.assertEqual(guardian.role, User.Role.GUARDIAN)
         self.assertEqual(guardian.national_id, self.guardian_data["national_id"])
         self.assertEqual(guardian.phone_number, self.guardian_data["phone_number"])
@@ -82,6 +93,22 @@ class RegisterStudentServiceTests(TestCase):
         self.assertIsNotNone(guardian.temporary_password_expires_at)
         self.assertNotEqual(guardian.password, account["temporary_password"])
         self.assertNotIn(account["temporary_password"], guardian.password)
+
+    def test_new_guardian_password_does_not_use_random_generator(self):
+        with patch(
+            "accounts.services.generate_temporary_password",
+            return_value="99999999",
+        ) as generator:
+            result = register_student(
+                student_data=self.student_data,
+                guardian_data=self.guardian_data,
+            )
+
+        generator.assert_not_called()
+        self.assertEqual(
+            result["guardian_account"]["temporary_password"],
+            self.guardian_data["national_id"],
+        )
 
     def test_existing_guardian_is_reused_without_modification(self):
         guardian = User.objects.create_user(
@@ -118,6 +145,34 @@ class RegisterStudentServiceTests(TestCase):
         self.assertEqual(
             result["guardian_account"]["username"], "existing-guardian-login"
         )
+
+    def test_existing_guardian_with_pending_temporary_password_is_untouched(self):
+        original_expiry = timezone.now() + timedelta(days=3)
+        guardian = User.objects.create_user(
+            username=self.guardian_data["national_id"],
+            national_id=self.guardian_data["national_id"],
+            password="PendingTemp!934",
+            role=User.Role.GUARDIAN,
+            must_change_password=True,
+            temporary_password_expires_at=original_expiry,
+        )
+        original_password = guardian.password
+        original_token_version = guardian.token_version
+
+        result = register_student(
+            student_data=self.student_data,
+            guardian_data=self.guardian_data,
+        )
+
+        guardian.refresh_from_db()
+        self.assertEqual(result["guardian_account"]["status"], "linked_existing")
+        self.assertIsNone(result["guardian_account"]["temporary_password"])
+        self.assertEqual(guardian.password, original_password)
+        self.assertTrue(guardian.check_password("PendingTemp!934"))
+        self.assertFalse(guardian.check_password(self.guardian_data["national_id"]))
+        self.assertEqual(guardian.token_version, original_token_version)
+        self.assertTrue(guardian.must_change_password)
+        self.assertEqual(guardian.temporary_password_expires_at, original_expiry)
 
     def test_non_guardian_national_id_rolls_back_registration(self):
         existing_user = User.objects.create_user(

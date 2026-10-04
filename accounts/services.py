@@ -16,7 +16,7 @@ from accounts.permission_catalog import (
 )
 
 
-TEMPORARY_PASSWORD_TTL = timedelta(hours=72)
+TEMPORARY_PASSWORD_TTL = timedelta(days=20)
 
 
 def apply_default_role_permissions(user):
@@ -262,8 +262,11 @@ def generate_temporary_password():
     return f"{secrets.randbelow(100_000_000):08d}"
 
 
-def assign_temporary_password(user):
-    password = generate_temporary_password()
+def assign_temporary_password(user, *, raw_password=None):
+    if raw_password is None:
+        password = generate_temporary_password()
+    else:
+        password = str(raw_password)
     user.set_password(password)
     user.must_change_password = True
     user.temporary_password_expires_at = timezone.now() + TEMPORARY_PASSWORD_TTL

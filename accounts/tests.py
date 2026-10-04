@@ -58,9 +58,24 @@ class PasswordLifecycleTests(TestCase):
         self.assertNotEqual(user.password, password)
         self.assertTrue(user.check_password(password))
         self.assertTrue(user.must_change_password)
-        self.assertGreater(
+        self.assertAlmostEqual(
             user.temporary_password_expires_at,
-            timezone.now() + timedelta(hours=71),
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
+        )
+
+    def test_explicit_temporary_password_is_hashed_and_keeps_leading_zero(self):
+        user = User(username="explicit-user", role=User.Role.GUARDIAN)
+        password = assign_temporary_password(user, raw_password="01234567890")
+        self.assertEqual(password, "01234567890")
+        self.assertNotEqual(user.password, password)
+        self.assertTrue(user.check_password("01234567890"))
+        self.assertFalse(user.check_password("1234567890"))
+        self.assertTrue(user.must_change_password)
+        self.assertAlmostEqual(
+            user.temporary_password_expires_at,
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
         )
 
     def test_generator_preserves_eight_digit_width(self):
@@ -170,7 +185,11 @@ class AccountManagementApiTests(TestCase):
             item["role"]
             for item in self.client.get("/api/v1/accounts/users/").data["data"]["results"]
         }
-        self.assertEqual(roles, {User.Role.GUARDIAN})
+        self.assertEqual(roles, {User.Role.TEACHER})
+        self.assertEqual(
+            self.client.get(f"/api/v1/accounts/users/{self.guardian.pk}/").status_code,
+            404,
+        )
 
     def test_teacher_guardian_and_tech_support_cannot_use_management(self):
         for user in (self.teacher, self.guardian, self.tech_support):
@@ -213,10 +232,34 @@ class AccountManagementApiTests(TestCase):
         self.assertTrue(response.data["success"])
         password = response.data["data"]["temporary_password"]
         user = User.objects.get(username="guardian2")
+        self.assertRegex(password, r"^\d{8}$")
         self.assertTrue(user.check_password(password))
         self.assertTrue(user.must_change_password)
-        self.assertIsNotNone(user.temporary_password_expires_at)
+        self.assertAlmostEqual(
+            user.temporary_password_expires_at,
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
+        )
         self.assertNotIn(password, user.password)
+
+    def test_create_user_with_national_id_still_gets_random_password(self):
+        self.authenticate(self.admin)
+        response = self.client.post(
+            "/api/v1/accounts/users/",
+            {
+                "username": "guardian-with-id",
+                "role": User.Role.GUARDIAN,
+                "national_id": "01234567890",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        password = response.data["data"]["temporary_password"]
+        user = User.objects.get(username="guardian-with-id")
+        self.assertRegex(password, r"^\d{8}$")
+        self.assertNotEqual(password, "01234567890")
+        self.assertFalse(user.check_password("01234567890"))
+        self.assertTrue(user.check_password(password))
 
     def test_create_rejects_forbidden_field_and_unauthorized_role(self):
         self.authenticate(self.secretariat)
@@ -325,6 +368,14 @@ class AccountManagementApiTests(TestCase):
                 {"is_active": False},
                 format="json",
             ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/accounts/users/{self.teacher.pk}/set-active/",
+                {"is_active": False},
+                format="json",
+            ).status_code,
             200,
         )
 
@@ -343,12 +394,92 @@ class AccountManagementApiTests(TestCase):
             self.teacher.check_password(response.data["data"]["temporary_password"])
         )
         self.assertTrue(self.teacher.must_change_password)
-        self.assertIsNotNone(self.teacher.temporary_password_expires_at)
+        self.assertAlmostEqual(
+            self.teacher.temporary_password_expires_at,
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
+        )
         self.assertEqual(self.teacher.token_version, 2)
         with self.assertRaises(AuthenticationFailed):
             WebTokenRefreshSerializer(data={"refresh": str(old_refresh)}).is_valid(
                 raise_exception=True
             )
+
+    def test_guardian_reset_password_is_random_not_national_id(self):
+        guardian = self.make_user(
+            "01234567890",
+            User.Role.GUARDIAN,
+            national_id="01234567890",
+        )
+        old_version = guardian.token_version
+        old_refresh = RefreshToken.for_user(guardian)
+        old_refresh["client"] = "mobile"
+        old_refresh["token_version"] = old_version
+        old_access = str(old_refresh.access_token)
+        self.authenticate(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/accounts/users/{guardian.pk}/reset-password/"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["code"], "PASSWORD_RESET")
+        password = response.data["data"]["temporary_password"]
+        self.assertRegex(password, r"^\d{8}$")
+        self.assertNotEqual(password, guardian.national_id)
+        guardian.refresh_from_db()
+        self.assertTrue(guardian.check_password(password))
+        self.assertFalse(guardian.check_password(self.password))
+        self.assertFalse(guardian.check_password(guardian.national_id))
+        self.assertTrue(guardian.must_change_password)
+        self.assertAlmostEqual(
+            guardian.temporary_password_expires_at,
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
+        )
+        self.assertEqual(guardian.token_version, old_version + 1)
+        self.client.force_authenticate(user=None)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {old_access}")
+        self.assertEqual(self.client.get("/api/v1/auth/mobile/me/").status_code, 401)
+        self.client.credentials()
+        self.assertEqual(
+            self.client.post(
+                "/api/v1/auth/mobile/refresh/",
+                {"refresh": str(old_refresh)},
+                format="json",
+            ).status_code,
+            401,
+        )
+
+    def test_reset_password_stays_random_for_every_role(self):
+        roles = (
+            User.Role.SCHOOL_ADMIN,
+            User.Role.SUPERVISOR,
+            User.Role.TEACHER,
+            User.Role.SECRETARIAT,
+            User.Role.TECH_SUPPORT,
+            User.Role.GUARDIAN,
+        )
+        self.authenticate(self.root)
+        for index, role in enumerate(roles):
+            target = self.make_user(
+                f"reset-random-{role}",
+                role,
+                national_id=f"0987654321{index}",
+            )
+            with self.subTest(role=role):
+                old_version = target.token_version
+                response = self.client.post(
+                    f"/api/v1/accounts/users/{target.pk}/reset-password/"
+                )
+                self.assertEqual(response.status_code, 200)
+                password = response.data["data"]["temporary_password"]
+                self.assertRegex(password, r"^\d{8}$")
+                target.refresh_from_db()
+                self.assertTrue(target.check_password(password))
+                self.assertFalse(target.check_password(self.password))
+                self.assertTrue(target.must_change_password)
+                self.assertEqual(target.token_version, old_version + 1)
 
     def test_reset_password_permissions(self):
         self.authenticate(self.admin)
@@ -362,6 +493,12 @@ class AccountManagementApiTests(TestCase):
         self.assertEqual(
             self.client.post(
                 f"/api/v1/accounts/users/{self.guardian.pk}/reset-password/"
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/accounts/users/{self.teacher.pk}/reset-password/"
             ).status_code,
             200,
         )

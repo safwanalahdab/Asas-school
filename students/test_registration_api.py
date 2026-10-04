@@ -1,8 +1,10 @@
 from copy import deepcopy
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import resolve
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from students.models import GuardianStudent, Student, StudentHealthProfile
@@ -147,7 +149,15 @@ class StudentRegistrationApiTests(TestCase):
         )
         self.assertEqual(guardian.national_id, "01234567890")
         self.assertEqual(guardian.phone_number, "0999999999")
-        self.assertTrue(guardian.check_password(account["temporary_password"]))
+        self.assertEqual(account["temporary_password"], "01234567890")
+        self.assertTrue(guardian.check_password("01234567890"))
+        self.assertNotEqual(guardian.password, "01234567890")
+        self.assertTrue(guardian.must_change_password)
+        self.assertAlmostEqual(
+            guardian.temporary_password_expires_at,
+            timezone.now() + timedelta(days=20),
+            delta=timedelta(minutes=1),
+        )
         self.assertTrue(
             GuardianStudent.objects.filter(
                 student_id=response.data["data"]["student"]["id"],
@@ -170,6 +180,8 @@ class StudentRegistrationApiTests(TestCase):
             must_change_password=False,
         )
         original_password = guardian.password
+        original_token_version = guardian.token_version
+        original_expiry = guardian.temporary_password_expires_at
 
         response = self.client.post(
             self.endpoint,
@@ -184,6 +196,10 @@ class StudentRegistrationApiTests(TestCase):
         self.assertIsNone(account["temporary_password"])
         guardian.refresh_from_db()
         self.assertEqual(guardian.password, original_password)
+        self.assertEqual(guardian.token_version, original_token_version)
+        self.assertFalse(guardian.must_change_password)
+        self.assertEqual(guardian.temporary_password_expires_at, original_expiry)
+        self.assertFalse(guardian.check_password(guardian.national_id))
         self.assertEqual(guardian.first_name, "Existing")
         self.assertEqual(guardian.last_name, "Guardian")
         self.assertEqual(guardian.phone_number, "0988888888")
@@ -246,6 +262,73 @@ class StudentRegistrationApiTests(TestCase):
             response.data["data"]["guardian_account"]["username"],
             "01234567890",
         )
+        self.assertEqual(
+            response.data["data"]["guardian_account"]["temporary_password"],
+            "01234567890",
+        )
+        self.assertTrue(guardian.check_password("01234567890"))
+        self.assertFalse(guardian.check_password("٠١٢-٣٤٥ ٦٧٨٩٠"))
+
+    def test_registered_guardian_mobile_first_login_flow(self):
+        self.authenticate(User.Role.SCHOOL_ADMIN)
+        registration = self.client.post(
+            self.endpoint, self.payload_with_guardian("01234567890"), format="json"
+        )
+        self.assertEqual(registration.status_code, 201)
+        self.client.force_authenticate(user=None)
+        remote_addr = "203.0.113.71"
+
+        login = self.client.post(
+            "/api/v1/auth/mobile/login/",
+            {"identifier": "01234567890", "password": "01234567890"},
+            format="json",
+            REMOTE_ADDR=remote_addr,
+        )
+        self.assertEqual(login.status_code, 200)
+        self.assertTrue(login.data["data"]["user"]["must_change_password"])
+
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login.data['data']['access']}"
+        )
+        blocked = self.client.get("/api/v1/mobile/children/")
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.data["code"], "PASSWORD_CHANGE_REQUIRED")
+
+        changed = self.client.post(
+            "/api/v1/auth/mobile/change-password/",
+            {
+                "current_password": "01234567890",
+                "new_password": "EvenStronger!8492",
+                "new_password_confirm": "EvenStronger!8492",
+            },
+            format="json",
+        )
+        self.assertEqual(changed.status_code, 200)
+        self.client.credentials()
+
+        guardian = User.objects.get(username="01234567890")
+        self.assertFalse(guardian.must_change_password)
+        self.assertFalse(guardian.check_password("01234567890"))
+        old_password_login = self.client.post(
+            "/api/v1/auth/mobile/login/",
+            {"identifier": "01234567890", "password": "01234567890"},
+            format="json",
+            REMOTE_ADDR=remote_addr,
+        )
+        self.assertEqual(old_password_login.status_code, 401)
+
+        new_password_login = self.client.post(
+            "/api/v1/auth/mobile/login/",
+            {"identifier": "01234567890", "password": "EvenStronger!8492"},
+            format="json",
+            REMOTE_ADDR=remote_addr,
+        )
+        self.assertEqual(new_password_login.status_code, 200)
+        self.assertFalse(new_password_login.data["data"]["user"]["must_change_password"])
+        self.client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {new_password_login.data['data']['access']}"
+        )
+        self.assertEqual(self.client.get("/api/v1/mobile/children/").status_code, 200)
 
     def test_invalid_request_returns_arabic_errors_without_records(self):
         self.authenticate(User.Role.SCHOOL_ADMIN)

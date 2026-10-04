@@ -80,7 +80,10 @@ def register_student(
                 first_name=guardian_data["first_name"],
                 last_name=guardian_data["last_name"],
             )
-            temporary_password = assign_temporary_password(guardian)
+            temporary_password = assign_temporary_password(
+                guardian,
+                raw_password=str(national_id),
+            )
             try:
                 with transaction.atomic():
                     guardian.save()
