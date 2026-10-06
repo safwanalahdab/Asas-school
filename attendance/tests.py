@@ -1,8 +1,9 @@
 from datetime import date, datetime, time, timedelta
 from unittest.mock import patch
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
@@ -507,3 +508,107 @@ class AttendanceAuditTests(AttendanceFixture):
         _, record = self.sheet_with_record()
         update_attendance_record(record=record, data={"notes": "special"})
         self.assertEqual(self.attendance_audits().count(), 0)
+
+
+class AttendanceSheetListQueryCountTests(AttendanceFixture):
+    SHEETS_COUNT = 2
+    SHEET_FIELDS = {
+        "id", "section", "section_display", "grade_level_display", "attendance_date",
+        "created_by", "created_by_display", "records", "created_at", "updated_at",
+    }
+    RECORD_FIELDS = {
+        "id", "sheet", "enrollment", "student_display",
+        "status", "arrival_time", "arrival_method", "departure_time",
+        "departure_method", "absence_type", "absence_reason",
+        "absence_reason_source", "notes",
+        "status_display", "arrival_method_display", "departure_method_display",
+        "absence_type_display", "absence_reason_source_display",
+        "created_at", "updated_at",
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.sheets = [
+            AttendanceSheet.objects.create(
+                section=self.section_a,
+                attendance_date=self.today - timedelta(days=offset),
+                created_by=self.supervisor,
+            )
+            for offset in range(self.SHEETS_COUNT)
+        ]
+        self.enrollments = [self.enrollment]
+        self.client = self.client_for(self.school_admin)
+
+    def grow_records_per_sheet(self, records_per_sheet):
+        while len(self.enrollments) < records_per_sheet:
+            index = len(self.enrollments)
+            student = Student.objects.create(
+                first_name=f"طالب{index}", last_name="اختبار",
+                birth_date=date(2018, 1, 1), gender=Student.Gender.MALE,
+            )
+            self.enrollments.append(Enrollment.objects.create(
+                student=student, academic_year=self.year, section=self.section_a,
+                enrollment_date=date(2026, 1, 1),
+            ))
+        for sheet in self.sheets:
+            for enrollment in self.enrollments:
+                AttendanceRecord.objects.get_or_create(
+                    sheet=sheet, enrollment=enrollment,
+                    defaults={"status": AttendanceRecord.Status.PRESENT},
+                )
+
+    def list_sheets(self, **params):
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get("/api/v1/attendance/sheets/", params)
+        return response, len(queries)
+
+    def assert_list_contract(self, response, records_per_sheet):
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["code"], "RECORDS_RETRIEVED")
+        data = response.data["data"]
+        self.assertEqual(set(data), {"count", "next", "previous", "results"})
+        self.assertEqual(data["count"], self.SHEETS_COUNT)
+        self.assertEqual(len(data["results"]), self.SHEETS_COUNT)
+
+        expected_students = {
+            str(enrollment.pk): enrollment.student.full_name
+            for enrollment in self.enrollments
+        }
+        for sheet in data["results"]:
+            self.assertEqual(set(sheet), self.SHEET_FIELDS)
+            self.assertEqual(len(sheet["records"]), records_per_sheet)
+            for record in sheet["records"]:
+                self.assertEqual(set(record), self.RECORD_FIELDS)
+                self.assertEqual(str(record["sheet"]), str(sheet["id"]))
+                self.assertEqual(
+                    record["student_display"],
+                    expected_students[str(record["enrollment"])],
+                )
+
+    def test_list_query_count_does_not_grow_with_records_per_sheet(self):
+        self.grow_records_per_sheet(2)
+        few_response, few_queries = self.list_sheets()
+        self.assert_list_contract(few_response, records_per_sheet=2)
+
+        self.grow_records_per_sheet(8)
+        many_response, many_queries = self.list_sheets()
+        self.assert_list_contract(many_response, records_per_sheet=8)
+
+        self.assertEqual(few_queries, many_queries)
+
+    def test_list_pagination_still_works_with_prefetched_records(self):
+        self.grow_records_per_sheet(3)
+
+        response, _ = self.list_sheets(page_size=1)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.data["data"]
+        self.assertEqual(data["count"], self.SHEETS_COUNT)
+        self.assertEqual(len(data["results"]), 1)
+        self.assertIsNotNone(data["next"])
+        self.assertIsNone(data["previous"])
+        self.assertEqual(len(data["results"][0]["records"]), 3)
+        self.assertEqual(
+            data["results"][0]["attendance_date"], self.today.isoformat()
+        )

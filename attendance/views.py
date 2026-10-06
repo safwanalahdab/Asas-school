@@ -129,7 +129,7 @@ class AttendanceSheetViewSet(
     def get_queryset(self):
         queryset = super().get_queryset()
 
-        if self.action == "retrieve":
+        if self.action in ("list", "retrieve"):
             records_queryset = AttendanceRecord.objects.select_related(
                 "sheet",
                 "sheet__section",
