@@ -36,7 +36,8 @@ def supervisor_academic_scope_for(user):
     return SupervisorAcademicScope(
         applies=True,
         scope_type=scope.scope_type,
-        stages=frozenset(scope.stages.values_list("stage", flat=True)),
+        # .all() reuses the prefetched rows; values_list() would query again.
+        stages=frozenset(item.stage for item in scope.stages.all()),
     )
 
 
@@ -44,11 +45,14 @@ def is_stage_scoped_supervisor(user):
     return supervisor_academic_scope_for(user).applies
 
 
-def is_stage_allowed(user, stage):
-    scope = supervisor_academic_scope_for(user)
+def _scope_allows_stage(scope, stage):
     if not scope.applies or scope.allows_all_stages:
         return True
     return bool(scope.scope_type and stage in scope.stages)
+
+
+def is_stage_allowed(user, stage):
+    return _scope_allows_stage(supervisor_academic_scope_for(user), stage)
 
 
 def filter_queryset_by_stage(queryset, user, *, stage_lookup="stage"):
@@ -109,12 +113,20 @@ def can_access_grade_level(user, grade_level):
     return is_stage_allowed(user, grade_level.stage)
 
 
+# Resolve the scope before touching FK relations so unscoped users never
+# trigger lazy section/grade-level loads.
 def can_access_section(user, section):
-    return is_stage_allowed(user, section.grade_level.stage)
+    scope = supervisor_academic_scope_for(user)
+    if not scope.applies or scope.allows_all_stages:
+        return True
+    return _scope_allows_stage(scope, section.grade_level.stage)
 
 
 def can_access_enrollment(user, enrollment):
-    return can_access_section(user, enrollment.section)
+    scope = supervisor_academic_scope_for(user)
+    if not scope.applies or scope.allows_all_stages:
+        return True
+    return _scope_allows_stage(scope, enrollment.section.grade_level.stage)
 
 
 def can_access_student(user, student):

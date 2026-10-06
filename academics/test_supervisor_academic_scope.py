@@ -1,6 +1,9 @@
 from datetime import date
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
+from rest_framework.exceptions import PermissionDenied
 
 from accounts.models import User
 from academics.models import (
@@ -24,6 +27,7 @@ from academics.supervisor_academic_scope import (
     is_stage_scoped_supervisor,
     supervisor_academic_scope_for,
 )
+from grades.supervisor_scope import require_enrollment, require_section
 from students.models import Enrollment, Student
 
 
@@ -307,3 +311,113 @@ class SupervisorAcademicScopePolicyTests(TestCase):
                 self.all_supervisor, self.primary, "secondary"
             )
         )
+
+    def fresh_section(self, section):
+        # Re-fetched so no FK relation is cached on the instance.
+        return Section.objects.get(pk=section.pk)
+
+    def fresh_enrollment(self, enrollment):
+        return Enrollment.objects.get(pk=enrollment.pk)
+
+    def scope_queries(self, user):
+        with CaptureQueriesContext(connection) as ctx:
+            scope = supervisor_academic_scope_for(user)
+        return scope, len(ctx.captured_queries)
+
+    def test_scope_query_count_does_not_grow_with_stage_count(self):
+        all_stages = [value for value, _ in GradeLevel.Stage.choices]
+        many_supervisor = self.scoped_supervisor("scope-many", all_stages)
+
+        few_scope, few_queries = self.scope_queries(self.primary_supervisor)
+        many_scope, many_queries = self.scope_queries(many_supervisor)
+
+        self.assertEqual(few_queries, many_queries)
+        # One query for the scope row and one for the prefetched stages.
+        self.assertEqual(many_queries, 2)
+        self.assertEqual(few_scope.stages, frozenset({"primary"}))
+        self.assertEqual(many_scope.stages, frozenset(all_stages))
+        self.assertEqual(
+            many_scope.scope_type, SupervisorScope.ScopeType.SELECTED_STAGES
+        )
+
+    def test_unscoped_users_access_checks_skip_lazy_relations(self):
+        for user in (self.admin, self.teacher, self.accountant, self.root):
+            with self.subTest(role=user.role):
+                section = self.fresh_section(self.preparatory_active)
+                enrollment = self.fresh_enrollment(self.preparatory_enrollment)
+                with self.assertNumQueries(0):
+                    self.assertTrue(can_access_section(user, section))
+                    self.assertTrue(can_access_enrollment(user, enrollment))
+                    self.assertTrue(
+                        can_access_grade_level(user, self.preparatory)
+                    )
+
+    def test_all_scope_supervisor_skips_lazy_relations(self):
+        section = self.fresh_section(self.secondary_active)
+        enrollment = self.fresh_enrollment(self.preparatory_enrollment)
+        # Only the scope lookups run: scope row + prefetched stages per call.
+        with self.assertNumQueries(4):
+            self.assertTrue(can_access_section(self.all_supervisor, section))
+            self.assertTrue(
+                can_access_enrollment(self.all_supervisor, enrollment)
+            )
+
+    def test_admin_and_teacher_keep_current_access(self):
+        for user in (self.admin, self.teacher):
+            with self.subTest(role=user.role):
+                self.assertTrue(can_access_section(user, self.secondary_active))
+                self.assertTrue(
+                    can_access_enrollment(user, self.preparatory_enrollment)
+                )
+                self.assertTrue(can_access_grade_level(user, self.secondary))
+                require_section(user, self.secondary_active)
+                require_enrollment(user, self.preparatory_enrollment)
+
+    def test_scoped_supervisor_in_and_out_of_scope(self):
+        user = self.primary_supervisor
+        self.assertTrue(
+            can_access_section(user, self.fresh_section(self.primary_active))
+        )
+        self.assertTrue(
+            can_access_enrollment(
+                user, self.fresh_enrollment(self.primary_enrollment)
+            )
+        )
+        self.assertFalse(
+            can_access_section(user, self.fresh_section(self.secondary_active))
+        )
+        self.assertFalse(
+            can_access_enrollment(
+                user, self.fresh_enrollment(self.preparatory_enrollment)
+            )
+        )
+        self.assertFalse(can_access_grade_level(user, self.secondary))
+
+    def assert_denied_with_current_message(self, func, *args):
+        with self.assertRaises(PermissionDenied) as raised:
+            func(*args)
+        self.assertEqual(
+            raised.exception.detail["code"], "SUPERVISOR_ACADEMIC_SCOPE_DENIED"
+        )
+        self.assertEqual(
+            raised.exception.detail["detail"],
+            "المورد المحدد خارج نطاق مراحل الموجّه.",
+        )
+
+    def test_missing_or_empty_scope_keeps_denials_and_messages(self):
+        empty_supervisor = self.scoped_supervisor("scope-empty", [])
+        for user in (self.missing_scope_supervisor, empty_supervisor):
+            with self.subTest(username=user.username):
+                self.assertFalse(
+                    can_access_section(user, self.primary_active)
+                )
+                self.assertFalse(
+                    can_access_enrollment(user, self.primary_enrollment)
+                )
+                self.assertFalse(can_access_grade_level(user, self.primary))
+                self.assert_denied_with_current_message(
+                    require_section, user, self.primary_active
+                )
+                self.assert_denied_with_current_message(
+                    require_enrollment, user, self.primary_enrollment
+                )
