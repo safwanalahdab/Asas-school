@@ -17,6 +17,14 @@ from .services import (
 )
 
 
+def visible_account_detail_sections(user):
+    """Which nested detail lists the user may see; shared by view prefetching."""
+    return {
+        "discounts": has_direct_permission(user, "finance.view_studentdiscount"),
+        "payments": has_direct_permission(user, "finance.view_payment"),
+    }
+
+
 class GradeTuitionPlanSerializer(
     serializers.ModelSerializer
 ):
@@ -397,17 +405,22 @@ class StudentFinancialAccountDetailSerializer(
             "updated_at",
         )
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
+    def get_fields(self):
+        fields = super().get_fields()
+
+        # Schema generation documents the full contract.
+        if getattr(self.context.get("view"), "swagger_fake_view", False):
+            return fields
+
+        # Drop hidden lists before serialization so they are never loaded.
         request = self.context.get("request")
         user = getattr(request, "user", None)
 
-        if not has_direct_permission(user, "finance.view_studentdiscount"):
-            data.pop("discounts", None)
-        if not has_direct_permission(user, "finance.view_payment"):
-            data.pop("payments", None)
+        for name, visible in visible_account_detail_sections(user).items():
+            if not visible:
+                fields.pop(name, None)
 
-        return data
+        return fields
 
 
 class AddDiscountSerializer(

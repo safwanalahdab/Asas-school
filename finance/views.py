@@ -43,8 +43,10 @@ from .serializers import (
     StudentDiscountSerializer,
     StudentFinancialAccountDetailSerializer,
     StudentFinancialAccountListSerializer,
+    visible_account_detail_sections,
 )
 from .services import (
+    account_totals_prefetches,
     calculate_account_totals,
     cancel_payment as cancel_payment_service,
     cancel_student_discount,
@@ -196,12 +198,6 @@ class StudentFinancialAccountViewSet(
             "tuition_plan__grade_level",
             "created_by",
         )
-        .prefetch_related(
-            "discounts__created_by",
-            "discounts__cancelled_by",
-            "payments__recorded_by",
-            "payments__cancelled_by",
-        )
     )
     action_permissions = {
         "list": "finance.view_studentfinancialaccount",
@@ -308,14 +304,42 @@ class StudentFinancialAccountViewSet(
             return queryset.none()
 
         if user.is_superuser:
-            return queryset
+            return self.prefetch_for_action(queryset)
 
         if user.role == User.Role.GUARDIAN:
-            return queryset.filter(
+            return self.prefetch_for_action(queryset.filter(
                 enrollment__student__guardian_link__guardian=user,
                 enrollment__student__guardian_link__is_active=True,
                 enrollment__student__is_active=True,
-            ).distinct()
+            ).distinct())
+
+        return self.prefetch_for_action(queryset)
+
+    def prefetch_for_action(self, queryset):
+        """Prefetch totals for reads, and detail lists only when visible."""
+        if self.action not in ("list", "retrieve"):
+            return queryset
+
+        queryset = queryset.prefetch_related(
+            *account_totals_prefetches(),
+        )
+
+        if self.action != "retrieve":
+            return queryset
+
+        visible = visible_account_detail_sections(self.request.user)
+
+        if visible["discounts"]:
+            queryset = queryset.prefetch_related(
+                "discounts__created_by",
+                "discounts__cancelled_by",
+            )
+
+        if visible["payments"]:
+            queryset = queryset.prefetch_related(
+                "payments__recorded_by",
+                "payments__cancelled_by",
+            )
 
         return queryset
 

@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
@@ -25,6 +26,9 @@ from .utils import (
 
 ZERO_USD = Decimal("0.00")
 HUNDRED = Decimal("100")
+
+ACTIVE_DISCOUNTS_FOR_TOTALS = "active_discounts_for_totals"
+ACTIVE_PAYMENTS_FOR_TOTALS = "active_payments_for_totals"
 
 
 def _notify_payment_recorded(payment):
@@ -189,6 +193,36 @@ def calculate_discount_usd(
     )
 
 
+def account_totals_prefetches():
+    """Load only the active rows and columns calculate_account_totals reads."""
+    return (
+        Prefetch(
+            "discounts",
+            queryset=StudentDiscount.objects.filter(
+                is_cancelled=False,
+            ).only(
+                "id",
+                "account",
+                "discount_type",
+                "value",
+                "equivalent_usd",
+            ),
+            to_attr=ACTIVE_DISCOUNTS_FOR_TOTALS,
+        ),
+        Prefetch(
+            "payments",
+            queryset=Payment.objects.filter(
+                is_cancelled=False,
+            ).only(
+                "id",
+                "account",
+                "equivalent_usd",
+            ),
+            to_attr=ACTIVE_PAYMENTS_FOR_TOTALS,
+        ),
+    )
+
+
 def calculate_account_totals(
     account,
     *,
@@ -207,12 +241,21 @@ def calculate_account_totals(
 
     total_discounts_usd = ZERO_USD
 
-    active_discounts = (
-        account.discounts
-        .filter(
-            is_cancelled=False,
-        )
+    # Reuse account_totals_prefetches() rows when present; .filter() would
+    # bypass the prefetch cache and query once per account.
+    active_discounts = getattr(
+        account,
+        ACTIVE_DISCOUNTS_FOR_TOTALS,
+        None,
     )
+
+    if active_discounts is None:
+        active_discounts = (
+            account.discounts
+            .filter(
+                is_cancelled=False,
+            )
+        )
 
     for discount in active_discounts:
         total_discounts_usd += (
@@ -235,12 +278,19 @@ def calculate_account_totals(
 
     total_paid_usd = ZERO_USD
 
-    active_payments = (
-        account.payments
-        .filter(
-            is_cancelled=False,
-        )
+    active_payments = getattr(
+        account,
+        ACTIVE_PAYMENTS_FOR_TOTALS,
+        None,
     )
+
+    if active_payments is None:
+        active_payments = (
+            account.payments
+            .filter(
+                is_cancelled=False,
+            )
+        )
 
     for payment in active_payments:
         total_paid_usd += (
