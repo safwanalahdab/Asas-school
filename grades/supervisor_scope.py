@@ -4,7 +4,8 @@ from academics.supervisor_academic_scope import (
     can_access_grade_level,
     can_access_section,
     can_access_enrollment,
-    is_stage_scoped_supervisor,
+    scope_allows_stage,
+    supervisor_academic_scope_for,
 )
 from .models import AssessmentSection, StudentScore
 
@@ -31,18 +32,23 @@ def require_enrollment(user, enrollment):
 
 
 def require_assessment(user, assessment):
-    if not is_stage_scoped_supervisor(user):
+    # Load the scope once; the require_* helpers would each reload it.
+    scope = supervisor_academic_scope_for(user)
+    if not scope.applies:
         return
     subject = assessment.grade_subject
-    require_grade_level(user, subject.grade_level)
-    links = AssessmentSection.objects.filter(assessment=assessment).select_related("section__grade_level")
-    for link in links:
-        if (link.section.grade_level_id != subject.grade_level_id
-                or link.section.academic_year_id != subject.academic_year_id):
-            raise PermissionDenied(DENIED)
-        require_section(user, link.section)
-    scores = StudentScore.objects.filter(assessment=assessment).select_related("recorded_section__grade_level")
-    for score in scores:
-        if not links.filter(section_id=score.recorded_section_id).exists():
-            raise PermissionDenied(DENIED)
-        require_section(user, score.recorded_section)
+    if not scope_allows_stage(scope, subject.grade_level.stage):
+        raise PermissionDenied(DENIED)
+    # Every linked section must sit in the subject's grade level, so it shares
+    # the stage already checked above; per-section scope checks are redundant.
+    links = AssessmentSection.objects.filter(assessment=assessment)
+    if links.exclude(
+        section__grade_level_id=subject.grade_level_id,
+        section__academic_year_id=subject.academic_year_id,
+    ).exists():
+        raise PermissionDenied(DENIED)
+    # Scores are scoped by their historical recorded_section, which must be linked.
+    if StudentScore.objects.filter(assessment=assessment).exclude(
+        recorded_section_id__in=links.values("section_id"),
+    ).exists():
+        raise PermissionDenied(DENIED)

@@ -143,3 +143,87 @@ class GradesSupervisorScopeTests(TestCase):
         self.assertEqual(correct("primary").status_code, 200)
         self.assertEqual(correct("preparatory").status_code, 404)
         self.assertEqual(StudentScore.objects.count(), 1)
+
+    def add_sections_with_scores(self, stage, count):
+        grade, _, _, assessment, _ = self.grades[stage]
+        offset = AssessmentSection.objects.filter(assessment=assessment).count()
+        for index in range(offset, offset + count):
+            section = Section.objects.create(academic_year=self.year, grade_level=grade, name=f"S{stage}{index}")
+            AssessmentSection.objects.create(assessment=assessment, section=section)
+            student = Student.objects.create(first_name=f"{stage}{index}", last_name="Extra", birth_date=date(2018, 1, 1), gender=Student.Gender.MALE)
+            enrollment = Enrollment.objects.create(student=student, academic_year=self.year, section=section, enrollment_date=date(2026, 1, 5))
+            StudentScore.objects.create(assessment=assessment, enrollment=enrollment, recorded_section=section, score=Decimal("10"), updated_by=self.user)
+
+    def require_assessment_queries(self, assessment):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from .supervisor_scope import require_assessment
+
+        assessment = Assessment.objects.select_related("grade_subject__grade_level").get(pk=assessment.pk)
+        with CaptureQueriesContext(connection) as ctx:
+            require_assessment(self.user, assessment)
+        return len(ctx.captured_queries)
+
+    def test_require_assessment_query_count_does_not_grow_with_sections_or_scores(self):
+        self.scope("primary")
+        assessment = self.grades["primary"][3]
+        self.add_sections_with_scores("primary", 1)
+        initial = self.require_assessment_queries(assessment)
+        self.add_sections_with_scores("primary", 5)
+        self.assertEqual(self.require_assessment_queries(assessment), initial)
+        # Scope row, prefetched stages, section consistency, score consistency.
+        self.assertEqual(initial, 4)
+
+    def test_require_assessment_denial_keeps_code_and_detail(self):
+        from rest_framework.exceptions import PermissionDenied
+        from .supervisor_scope import require_assessment
+
+        self.scope("primary")
+        with self.assertRaises(PermissionDenied) as ctx:
+            require_assessment(self.user, self.grades["preparatory"][3])
+        self.assertEqual(ctx.exception.detail["code"], "SUPERVISOR_ACADEMIC_SCOPE_DENIED")
+        self.assertEqual(ctx.exception.detail["detail"], "المورد المحدد خارج نطاق مراحل الموجّه.")
+
+    def test_require_assessment_scope_cases(self):
+        from rest_framework.exceptions import PermissionDenied
+        from .supervisor_scope import require_assessment
+
+        teacher = User.objects.create_user(username="grades-scope-teacher", password="x", role=User.Role.TEACHER, must_change_password=False)
+        root = User.objects.create_superuser(username="grades-scope-root", password="x", must_change_password=False)
+
+        def empty_selected():
+            SupervisorScope.objects.update_or_create(supervisor=self.user, defaults={"scope_type": "selected_stages"})
+            SupervisorScopeStage.objects.filter(scope__supervisor=self.user).delete()
+
+        def allowed(user, stage):
+            try:
+                require_assessment(user, self.grades[stage][3])
+            except PermissionDenied:
+                return False
+            return True
+
+        cases = [
+            ("missing scope", lambda: None, self.user, {"primary": False, "preparatory": False}),
+            ("all scope", lambda: self.scope(), self.user, {"primary": True, "preparatory": True}),
+            ("empty selected_stages", empty_selected, self.user, {"primary": False, "preparatory": False}),
+            ("in/out of scope", lambda: self.scope("primary"), self.user, {"primary": True, "preparatory": False}),
+            ("non-supervisor", lambda: None, teacher, {"primary": True, "preparatory": True}),
+            ("superuser", lambda: None, root, {"primary": True, "preparatory": True}),
+        ]
+        for name, arrange, user, expected in cases:
+            arrange()
+            for stage, result in expected.items():
+                with self.subTest(case=name, stage=stage):
+                    self.assertEqual(allowed(user, stage), result)
+
+    def test_require_assessment_rejects_score_recorded_outside_linked_sections(self):
+        from rest_framework.exceptions import PermissionDenied
+        from .supervisor_scope import require_assessment
+
+        self.scope()
+        _, section, _, assessment, enrollment = self.grades["primary"]
+        StudentScore.objects.create(assessment=assessment, enrollment=enrollment, recorded_section=section, score=Decimal("10"), updated_by=self.user)
+        require_assessment(self.user, assessment)
+        StudentScore.objects.filter(assessment=assessment).update(recorded_section=Section.objects.create(academic_year=self.year, grade_level=section.grade_level, name="Unlinked"))
+        with self.assertRaises(PermissionDenied):
+            require_assessment(self.user, assessment)

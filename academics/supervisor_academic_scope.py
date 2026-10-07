@@ -45,14 +45,15 @@ def is_stage_scoped_supervisor(user):
     return supervisor_academic_scope_for(user).applies
 
 
-def _scope_allows_stage(scope, stage):
+def scope_allows_stage(scope, stage):
+    """Decide a stage against an already-loaded scope, avoiding a reload."""
     if not scope.applies or scope.allows_all_stages:
         return True
     return bool(scope.scope_type and stage in scope.stages)
 
 
 def is_stage_allowed(user, stage):
-    return _scope_allows_stage(supervisor_academic_scope_for(user), stage)
+    return scope_allows_stage(supervisor_academic_scope_for(user), stage)
 
 
 def filter_queryset_by_stage(queryset, user, *, stage_lookup="stage"):
@@ -119,14 +120,14 @@ def can_access_section(user, section):
     scope = supervisor_academic_scope_for(user)
     if not scope.applies or scope.allows_all_stages:
         return True
-    return _scope_allows_stage(scope, section.grade_level.stage)
+    return scope_allows_stage(scope, section.grade_level.stage)
 
 
 def can_access_enrollment(user, enrollment):
     scope = supervisor_academic_scope_for(user)
     if not scope.applies or scope.allows_all_stages:
         return True
-    return _scope_allows_stage(scope, enrollment.section.grade_level.stage)
+    return scope_allows_stage(scope, enrollment.section.grade_level.stage)
 
 
 def can_access_student(user, student):
