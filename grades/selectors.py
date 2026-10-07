@@ -38,8 +38,18 @@ def get_assessment_score_rows(*, assessment, section):
     transfer_history = StudentAuditLog.objects.filter(
         event_type=StudentAuditLog.EventType.SECTION_TRANSFER,
     ).order_by("created_at", "id")
+    # get_enrollment_section_id_on_date only ever returns the current section
+    # (no transfers) or a transfer's old/new section, so an enrollment can only
+    # match this section if one of those is it. It still makes the final call.
+    transferred_ids = transfer_history.filter(
+        Q(old_section=section) | Q(new_section=section),
+    ).order_by().values("enrollment_id")
     enrollments = Enrollment.objects.filter(
-        Q(academic_year=section.academic_year, enrollment_date__lte=assessment.assessment_date)
+        Q(
+            Q(section=section) | Q(id__in=transferred_ids),
+            academic_year=section.academic_year,
+            enrollment_date__lte=assessment.assessment_date,
+        )
         | Q(id__in=scored_ids)
     ).select_related("student").prefetch_related(
         Prefetch("assessment_scores", queryset=scores, to_attr="selected_scores"),

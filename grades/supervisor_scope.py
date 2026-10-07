@@ -21,9 +21,21 @@ def require_grade_level(user, grade_level):
         raise PermissionDenied(DENIED)
 
 
-def require_section(user, section):
-    if not can_access_section(user, section):
+def _require_stage(scope, get_stage):
+    # Resolve FK relations only for selected-stage scopes, like can_access_*.
+    if not scope.applies or scope.allows_all_stages:
+        return
+    if not scope_allows_stage(scope, get_stage()):
         raise PermissionDenied(DENIED)
+
+
+def require_section(user, section, *, scope=None):
+    """Pass an already-loaded scope to avoid reloading it per call."""
+    if scope is None:
+        if not can_access_section(user, section):
+            raise PermissionDenied(DENIED)
+        return
+    _require_stage(scope, lambda: section.grade_level.stage)
 
 
 def require_enrollment(user, enrollment):
@@ -31,9 +43,18 @@ def require_enrollment(user, enrollment):
         raise PermissionDenied(DENIED)
 
 
-def require_assessment(user, assessment):
+def require_enrollments(user, enrollments, *, scope=None):
+    """Check many enrollments against one scope load; keeps the first denial."""
+    if scope is None:
+        scope = supervisor_academic_scope_for(user)
+    for enrollment in enrollments:
+        _require_stage(scope, lambda: enrollment.section.grade_level.stage)
+
+
+def require_assessment(user, assessment, *, scope=None):
     # Load the scope once; the require_* helpers would each reload it.
-    scope = supervisor_academic_scope_for(user)
+    if scope is None:
+        scope = supervisor_academic_scope_for(user)
     if not scope.applies:
         return
     subject = assessment.grade_subject

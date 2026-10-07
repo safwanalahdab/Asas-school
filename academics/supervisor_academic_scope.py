@@ -56,9 +56,13 @@ def is_stage_allowed(user, stage):
     return scope_allows_stage(supervisor_academic_scope_for(user), stage)
 
 
-def filter_queryset_by_stage(queryset, user, *, stage_lookup="stage"):
-    """Filter a queryset whose stage is direct or reachable by a lookup path."""
-    scope = supervisor_academic_scope_for(user)
+def filter_queryset_by_stage(queryset, user, *, stage_lookup="stage", scope=None):
+    """Filter a queryset whose stage is direct or reachable by a lookup path.
+
+    Pass an already-loaded ``scope`` to avoid reloading it.
+    """
+    if scope is None:
+        scope = supervisor_academic_scope_for(user)
     if not scope.applies or scope.allows_all_stages:
         return queryset
     if not scope.scope_type:

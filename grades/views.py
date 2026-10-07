@@ -1,3 +1,5 @@
+from functools import cached_property
+
 from django.contrib.auth import get_user_model
 from django.db.models import (
     Exists,
@@ -30,7 +32,9 @@ from teaching.models import TeacherAssignment
 
 from .filters import AssessmentFilter
 from academics.models import Section
-from academics.supervisor_academic_scope import filter_queryset_by_stage, is_stage_scoped_supervisor
+from academics.supervisor_academic_scope import (
+    filter_queryset_by_stage, is_stage_scoped_supervisor, supervisor_academic_scope_for,
+)
 from .supervisor_scope import (
     require_assessment, require_enrollment, require_grade_level, require_section,
 )
@@ -253,9 +257,10 @@ class AssessmentViewSet(
             return queryset
 
         if user.role != User.Role.TEACHER:
-            if is_stage_scoped_supervisor(user):
+            scope = self.supervisor_scope
+            if scope.applies:
                 queryset = filter_queryset_by_stage(
-                    queryset, user, stage_lookup="grade_subject__grade_level__stage"
+                    queryset, user, stage_lookup="grade_subject__grade_level__stage", scope=scope,
                 )
                 mismatched_links = AssessmentSection.objects.exclude(
                     section__grade_level_id=F("assessment__grade_subject__grade_level_id"),
@@ -274,12 +279,12 @@ class AssessmentViewSet(
                 queryset = (queryset.exclude(pk__in=mismatched_links)
                             .exclude(pk__in=mismatched_scores)
                             .exclude(pk__in=unlinked_scores))
-                scope = filter_queryset_by_stage(
+                scoped_links = filter_queryset_by_stage(
                     AssessmentSection.objects.all(), user,
-                    stage_lookup="section__grade_level__stage",
+                    stage_lookup="section__grade_level__stage", scope=scope,
                 )
                 queryset = queryset.exclude(
-                    pk__in=AssessmentSection.objects.exclude(pk__in=scope.values("pk")).values("assessment_id")
+                    pk__in=AssessmentSection.objects.exclude(pk__in=scoped_links.values("pk")).values("assessment_id")
                 )
             return queryset
 
@@ -320,9 +325,14 @@ class AssessmentViewSet(
 
         return queryset.none()
 
+    @cached_property
+    def supervisor_scope(self):
+        # Views are per-request, so this loads the supervisor scope once per request.
+        return supervisor_academic_scope_for(self.request.user)
+
     def get_object(self):
         assessment = super().get_object()
-        require_assessment(self.request.user, assessment)
+        require_assessment(self.request.user, assessment, scope=self.supervisor_scope)
         return assessment
 
     @extend_schema(
@@ -519,7 +529,7 @@ class AssessmentViewSet(
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError({"section": "معرّف الشعبة غير صالح."})
         link = resolve_assessment_section(assessment=assessment, section=section)
-        require_section(request.user, link.section)
+        require_section(request.user, link.section, scope=self.supervisor_scope)
         ensure_actor_can_manage_scope(actor=request.user, section=link.section, grade_subject=assessment.grade_subject)
 
         records = get_assessment_score_rows(
@@ -574,9 +584,10 @@ class AssessmentViewSet(
             assessment=assessment,
             section=serializer.validated_data["section"],
         )
-        require_section(request.user, link.section)
-        for record in serializer.validated_data["records"]:
-            require_enrollment(request.user, record["enrollment"])
+        require_section(request.user, link.section, scope=self.supervisor_scope)
+        # Per-enrollment scope checks run once, in the service, on the batch
+        # the serializer loaded; enrollment denials only affect supervisors,
+        # whom ensure_actor_can_manage_scope never blocks, so order is unchanged.
         ensure_actor_can_manage_scope(
             actor=request.user,
             section=link.section,
@@ -592,6 +603,7 @@ class AssessmentViewSet(
                 ]
             ),
             actor=request.user,
+            scope=self.supervisor_scope,
         )
 
         records = get_assessment_score_rows(

@@ -11,22 +11,26 @@ from accounts.permissions import has_direct_permission
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
 from notifications.services import create_notification
-from students.models import GuardianStudent
+from academics.supervisor_academic_scope import supervisor_academic_scope_for
+from students.models import GuardianStudent, StudentAuditLog
 from teaching.models import TeacherAssignment
 
 from .models import Assessment, AssessmentSection, ScoreAuditLog, StudentScore
 from .selectors import get_enrollment_section_id_on_date
-from .supervisor_scope import require_assessment, require_grade_level, require_section, require_enrollment
+from .supervisor_scope import (
+    require_assessment, require_enrollments, require_grade_level, require_section,
+)
 
 User = get_user_model()
 ZERO = Decimal("0")
 
 
 def record_score_audit(*, student_score, old_score, actor, source):
+    # FK ids avoid lazy-loading the score's relations for every audited row.
     return ScoreAuditLog.objects.create(
-        assessment=student_score.assessment,
-        enrollment=student_score.enrollment,
-        recorded_section=student_score.recorded_section,
+        assessment_id=student_score.assessment_id,
+        enrollment_id=student_score.enrollment_id,
+        recorded_section_id=student_score.recorded_section_id,
         old_score=old_score,
         new_score=student_score.score,
         actor=actor,
@@ -62,14 +66,14 @@ def ensure_actor_can_manage_scope(*, actor, section, grade_subject):
     raise PermissionDenied({"code": "GRADE_ASSIGNMENT_REQUIRED", "detail": "ليس لديك تكليف فعال لإدارة هذه المادة والشعبة."})
 
 
-def ensure_can_edit_published_score(*, actor, link):
+def ensure_can_edit_published_score(*, actor, link, scope=None):
     if link.status != AssessmentSection.Status.PUBLISHED:
         return
     if not actor.is_superuser and actor.role not in (User.Role.SCHOOL_ADMIN, User.Role.SUPERVISOR):
         raise PermissionDenied("Published grades cannot be changed by this role.")
     if not has_direct_permission(actor, "grades.correct_published_grades"):
         raise PermissionDenied("Published grade correction permission is required.")
-    require_section(actor, link.section)
+    require_section(actor, link.section, scope=scope)
 
 
 def _validate_definition(*, title, max_score, term, assessment_date):
@@ -298,12 +302,13 @@ def unpublish_assessment_schedule(*, assessment, section, actor):
     return _assessment_schedule_result(link)
 
 
-def _validate_score(*, assessment, section, enrollment, score):
+def _validate_score(*, assessment, section, enrollment, score, transfer_logs=None):
     if (
         enrollment.academic_year_id != section.academic_year_id
         or get_enrollment_section_id_on_date(
             enrollment=enrollment,
             target_date=assessment.assessment_date,
+            transfer_logs=transfer_logs,
         ) != section.id
     ):
         raise ValidationError({"enrollment": "الطالب لم يكن يتبع شعبة التقييم في تاريخ التقييم."})
@@ -313,27 +318,46 @@ def _validate_score(*, assessment, section, enrollment, score):
         raise ValidationError({"score": "العلامة يجب أن تكون بين صفر والنهاية العظمى."})
 
 
+def _transfer_logs_by_enrollment(enrollment_ids):
+    """One query for the history get_enrollment_section_id_on_date would load per enrollment."""
+    logs = {enrollment_id: [] for enrollment_id in enrollment_ids}
+    if not logs:
+        return logs
+    for log in StudentAuditLog.objects.filter(
+        enrollment_id__in=logs,
+        event_type=StudentAuditLog.EventType.SECTION_TRANSFER,
+    ).order_by("created_at", "id"):
+        logs[log.enrollment_id].append(log)
+    return logs
+
+
 @transaction.atomic
-def save_assessment_scores_bulk(*, assessment, section, records, actor, source=ScoreAuditLog.Source.API):
-    require_assessment(actor, assessment)
-    require_section(actor, section)
-    for record in records:
-        require_enrollment(actor, record["enrollment"])
+def save_assessment_scores_bulk(*, assessment, section, records, actor, source=ScoreAuditLog.Source.API, scope=None):
+    # One scope load serves every check below; callers may pass theirs in.
+    if scope is None:
+        scope = supervisor_academic_scope_for(actor)
+    require_assessment(actor, assessment, scope=scope)
+    require_section(actor, section, scope=scope)
+    require_enrollments(actor, [record["enrollment"] for record in records], scope=scope)
     assessment = Assessment.objects.select_for_update().select_related("grade_subject").get(pk=assessment.pk)
     link = AssessmentSection.objects.select_for_update().select_related("section").get(assessment=assessment, section=section)
     ensure_actor_can_manage_scope(actor=actor, section=link.section, grade_subject=assessment.grade_subject)
-    ensure_can_edit_published_score(actor=actor, link=link)
+    ensure_can_edit_published_score(actor=actor, link=link, scope=scope)
     ids = [record["enrollment"].id for record in records]
     if not ids or len(ids) != len(set(ids)):
         raise ValidationError({"records": "يجب إرسال سجلات غير مكررة لطالب واحد على الأقل."})
     existing = {x.enrollment_id: x for x in StudentScore.objects.select_for_update().filter(assessment=assessment, enrollment_id__in=ids)}
+    transfer_logs = _transfer_logs_by_enrollment([x for x in ids if x not in existing])
     saved = []
     changed_count = 0
     for record in records:
         enrollment, value = record["enrollment"], record.get("score")
         current = existing.get(enrollment.id)
         if current is None:
-            _validate_score(assessment=assessment, section=section, enrollment=enrollment, score=value)
+            _validate_score(
+                assessment=assessment, section=section, enrollment=enrollment, score=value,
+                transfer_logs=transfer_logs[enrollment.id],
+            )
             current = StudentScore.objects.create(assessment=assessment, enrollment=enrollment, recorded_section=section, score=value, updated_by=actor)
             old = None
             changed = True

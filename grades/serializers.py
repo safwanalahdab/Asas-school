@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from rest_framework import serializers
@@ -271,10 +272,34 @@ class StudentScoreSerializer(
         read_only_fields = fields
 
 
+def _enrollment_key(value):
+    # Same inputs Django's UUIDField accepts; anything else stays unresolved.
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+class BulkEnrollmentField(serializers.PrimaryKeyRelatedField):
+    """Resolve from the batch the root serializer loaded.
+
+    Unloaded values (missing or malformed ids) fall back to the per-item lookup
+    so error messages and their positions stay exactly as before.
+    """
+
+    def to_internal_value(self, data):
+        loaded = getattr(self.root, "loaded_enrollments", None)
+        if loaded:
+            enrollment = loaded.get(_enrollment_key(data))
+            if enrollment is not None:
+                return enrollment
+        return super().to_internal_value(data)
+
+
 class BulkScoreRecordSerializer(
     serializers.Serializer,
 ):
-    enrollment = serializers.PrimaryKeyRelatedField(
+    enrollment = BulkEnrollmentField(
         queryset=Enrollment.objects.all(),
     )
 
@@ -296,6 +321,29 @@ class BulkAssessmentScoresSerializer(
         many=True,
         allow_empty=False,
     )
+
+    def to_internal_value(self, data):
+        self.loaded_enrollments = self._load_enrollments(data)
+        return super().to_internal_value(data)
+
+    def _load_enrollments(self, data):
+        """Fetch every requested enrollment, with its stage path, in one query."""
+        records = data.get("records") if hasattr(data, "get") else None
+        if not isinstance(records, list):
+            return {}
+        keys = {
+            _enrollment_key(record.get("enrollment"))
+            for record in records
+            if hasattr(record, "get")
+        } - {None}
+        if not keys:
+            return {}
+        return {
+            str(enrollment.pk): enrollment
+            for enrollment in Enrollment.objects.select_related(
+                "section__grade_level",
+            ).filter(pk__in=keys)
+        }
 
 
 class AssessmentScoreRowSerializer(
