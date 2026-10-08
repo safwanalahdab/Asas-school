@@ -2,7 +2,7 @@ from academics.models import AcademicYear
 from students.models import Enrollment
 
 from notifications.models import Notification
-from notifications.services import create_notification
+from notifications.services import create_notifications
 
 
 def notify_homework_created(homework):
@@ -17,11 +17,11 @@ def notify_homework_created(homework):
         student__guardian_link__guardian__role="guardian",
     ).select_related("student", "student__guardian_link__guardian")
 
-    notifications = []
+    specs = []
     for enrollment in enrollments:
         student = enrollment.student
         guardian = student.guardian_link.guardian
-        notification, _created = create_notification(
+        specs.append(dict(
             recipient=guardian,
             notification_type=Notification.NotificationType.HOMEWORK,
             title="واجب جديد",
@@ -33,6 +33,5 @@ def notify_homework_created(homework):
             resource_type="homework",
             resource_id=homework.id,
             event_key=f"homework:{homework.id}:student:{student.id}",
-        )
-        notifications.append(notification)
-    return notifications
+        ))
+    return [notification for notification, _created in create_notifications(specs)]

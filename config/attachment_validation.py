@@ -69,6 +69,15 @@ def _validate_pdf(content):
 
 def validate_attachment(uploaded_file):
     """Validate an incoming attachment without saving or modifying it."""
+    read_validated_attachment(uploaded_file)
+
+
+def read_validated_attachment(uploaded_file):
+    """Validate once and return ``(extension, content)`` for further processing.
+
+    ``content`` is the single bounded read used for validation, so callers do
+    not need to read or re-validate the upload again.
+    """
     original_position = None
     try:
         if hasattr(uploaded_file, "tell"):
@@ -97,6 +106,7 @@ def validate_attachment(uploaded_file):
             _validate_image(content, _IMAGE_FORMATS[extension])
         else:
             _validate_pdf(content)
+        return extension, content
     finally:
         if original_position is not None:
             try:

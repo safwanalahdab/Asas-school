@@ -16,6 +16,11 @@ from academics.supervisor_academic_scope import (
 )
 from rest_framework.exceptions import PermissionDenied
 from config.api_responses import ArabicApiResponseMixin
+from config.attachment_storage import (
+    delete_attachment_on_commit,
+    delete_replaced_attachment_on_commit,
+    discard_new_attachment_on_error,
+)
 from students.models import Enrollment
 from teaching.models import TeacherAssignment
 
@@ -263,14 +268,30 @@ class AnnouncementViewSet(
                 "detail": "الإعلان خارج نطاق مراحل الموجّه.",
             })
 
-    @transaction.atomic
     def perform_create(self, serializer):
-        self.require_supervisor_targets(serializer)
-        announcement = serializer.save(
-            created_by=self.request.user,
-        )
-        notify_announcement_published(announcement)
+        # The cleanup wraps the atomic block so a failed commit is covered too.
+        with discard_new_attachment_on_error(
+            Announcement, serializer.validated_data.get("attachment"),
+        ), transaction.atomic():
+            self.require_supervisor_targets(serializer)
+            announcement = serializer.save(
+                created_by=self.request.user,
+            )
+            notify_announcement_published(announcement)
 
     def perform_update(self, serializer):
-        self.require_supervisor_targets(serializer)
-        serializer.save()
+        # A failed write discards only the new upload and keeps the old
+        # reference; a replaced or cleared file is deleted after commit only.
+        previous_name = serializer.instance.attachment.name
+        with discard_new_attachment_on_error(
+            Announcement, serializer.validated_data.get("attachment"),
+        ), transaction.atomic():
+            self.require_supervisor_targets(serializer)
+            announcement = serializer.save()
+            delete_replaced_attachment_on_commit(announcement, previous_name)
+
+    def perform_destroy(self, instance):
+        with transaction.atomic():
+            attachment_name = instance.attachment.name
+            super().perform_destroy(instance)
+            delete_attachment_on_commit(Announcement, attachment_name)

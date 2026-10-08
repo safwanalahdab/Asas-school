@@ -1,10 +1,15 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from config.attachment_serializers import PreparedAttachmentSerializerMixin
+
 from .models import Announcement
 
 
-class AnnouncementSerializer(serializers.ModelSerializer):
+class AnnouncementSerializer(
+    PreparedAttachmentSerializerMixin,
+    serializers.ModelSerializer,
+):
     scope_display = serializers.CharField(
         source="get_scope_display",
         read_only=True,

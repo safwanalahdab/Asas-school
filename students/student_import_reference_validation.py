@@ -234,7 +234,9 @@ def _load_student_candidates(rows):
         "gender",
     )
     grouped = defaultdict(list)
-    for student in students:
+    # The birth-date/gender filter is a broad superset; stream it so only the
+    # matching students stay in memory instead of the whole cached queryset.
+    for student in students.iterator(chunk_size=2000):
         signature = _student_signature(
             {
                 "first_name": student.first_name,

@@ -5,7 +5,7 @@ from academics.models import AcademicYear
 from students.models import Enrollment
 
 from notifications.models import Notification
-from notifications.services import create_notification
+from notifications.services import create_notifications
 
 from .models import Announcement
 
@@ -39,9 +39,9 @@ def notify_announcement_published(announcement):
     ).distinct()
     guardians = User.objects.filter(pk__in=guardian_ids, is_active=True)
 
-    notifications = []
+    specs = []
     for guardian in guardians:
-        notification, _created = create_notification(
+        specs.append(dict(
             recipient=guardian,
             notification_type=Notification.NotificationType.ANNOUNCEMENT,
             title="إعلان جديد",
@@ -53,6 +53,5 @@ def notify_announcement_published(announcement):
             resource_type="announcement",
             resource_id=announcement.id,
             event_key=f"announcement:{announcement.id}:published",
-        )
-        notifications.append(notification)
-    return notifications
+        ))
+    return [notification for notification, _created in create_notifications(specs)]

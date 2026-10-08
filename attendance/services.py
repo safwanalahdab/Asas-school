@@ -9,7 +9,7 @@ from academics.models import Section
 from accounts.models import User
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
-from notifications.services import create_notification
+from notifications.services import create_notifications
 from students.models import Enrollment, GuardianStudent, StudentAuditLog
 from teaching.models import TeacherAssignment
 from .domain import ATTENDANCE_FIELDS, normalize_and_validate_record
@@ -51,11 +51,12 @@ def _notify_final_absences(records):
             is_active=True,
         ).select_related("guardian", "student")
     }
+    specs = []
     for record in absent_records:
         guardian_link = guardian_links.get(record.enrollment.student_id)
         if guardian_link is None:
             continue
-        create_notification(
+        specs.append(dict(
             recipient=guardian_link.guardian,
             notification_type="attendance",
             title="تسجيل غياب",
@@ -64,7 +65,8 @@ def _notify_final_absences(records):
             resource_type="attendance",
             resource_id=record.id,
             event_key=f"attendance:{record.id}:absent",
-        )
+        ))
+    create_notifications(specs)
 
 
 def get_effective_attendance_roster(*, section, attendance_date):

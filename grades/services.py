@@ -10,7 +10,7 @@ from academics.models import Section
 from accounts.permissions import has_direct_permission
 from audit_logs.models import AuditLog
 from audit_logs.services import get_actor_display, record_audit_event
-from notifications.services import create_notification
+from notifications.services import create_notifications
 from academics.supervisor_academic_scope import supervisor_academic_scope_for
 from students.models import GuardianStudent, StudentAuditLog
 from teaching.models import TeacherAssignment
@@ -427,6 +427,7 @@ def _notify_published_assessment_sections(links):
         ).select_related("guardian", "student")
     }
 
+    specs = []
     for score in scores:
         assessment_link = links_by_scope[
             (score.assessment_id, score.recorded_section_id)
@@ -434,7 +435,7 @@ def _notify_published_assessment_sections(links):
         guardian_link = guardian_links.get(score.enrollment.student_id)
         if guardian_link is None:
             continue
-        create_notification(
+        specs.append(dict(
             recipient=guardian_link.guardian,
             notification_type="grades",
             title="تم نشر علامات جديدة",
@@ -446,7 +447,8 @@ def _notify_published_assessment_sections(links):
                 f"grade_publish:{assessment_link.id}:student:"
                 f"{guardian_link.student_id}"
             ),
-        )
+        ))
+    create_notifications(specs)
 
 
 @transaction.atomic

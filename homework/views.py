@@ -13,6 +13,11 @@ from academics.supervisor_academic_scope import (
     is_stage_scoped_supervisor,
 )
 from config.api_responses import ArabicApiResponseMixin
+from config.attachment_storage import (
+    delete_attachment_on_commit,
+    delete_replaced_attachment_on_commit,
+    discard_new_attachment_on_error,
+)
 
 from .models import Homework
 from .permissions import IsWebClientToken
@@ -197,28 +202,41 @@ class HomeworkViewSet(
                 teacher_assignment,
             )
 
-    @transaction.atomic
     def perform_create(self, serializer):
-        self.validate_supervisor_assignment_scope(serializer)
-        self.validate_teacher_assignment_access(
-            serializer,
-        )
+        # The cleanup wraps the atomic block so a failed commit is covered too.
+        with discard_new_attachment_on_error(
+            Homework, serializer.validated_data.get("attachment"),
+        ), transaction.atomic():
+            self.validate_supervisor_assignment_scope(serializer)
+            self.validate_teacher_assignment_access(
+                serializer,
+            )
 
-        homework = serializer.save(
-            created_by=self.request.user,
-        )
-        notify_homework_created(homework)
+            homework = serializer.save(
+                created_by=self.request.user,
+            )
+            notify_homework_created(homework)
 
     def perform_update(self, serializer):
-        self.validate_supervisor_assignment_scope(serializer)
-        self.validate_teacher_assignment_access(
-            serializer,
-        )
+        # A failed write discards only the new upload and keeps the old
+        # reference; a replaced or cleared file is deleted after commit only.
+        previous_name = serializer.instance.attachment.name
+        with discard_new_attachment_on_error(
+            Homework, serializer.validated_data.get("attachment"),
+        ), transaction.atomic():
+            self.validate_supervisor_assignment_scope(serializer)
+            self.validate_teacher_assignment_access(
+                serializer,
+            )
 
-        serializer.save()
+            homework = serializer.save()
+            delete_replaced_attachment_on_commit(homework, previous_name)
 
     def perform_destroy(self, instance):
         self.validate_teacher_assignment_write_access(
             instance.teacher_assignment,
         )
-        super().perform_destroy(instance)
+        with transaction.atomic():
+            attachment_name = instance.attachment.name
+            super().perform_destroy(instance)
+            delete_attachment_on_commit(Homework, attachment_name)

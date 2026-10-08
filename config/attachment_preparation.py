@@ -1,9 +1,8 @@
 from dataclasses import dataclass
-from pathlib import Path
 from uuid import uuid4
 
-from config.attachment_processing import optimize_image_attachment
-from config.attachment_validation import validate_attachment
+from config.attachment_processing import optimize_validated_image_content
+from config.attachment_validation import read_validated_attachment
 
 
 @dataclass(frozen=True)
@@ -20,18 +19,17 @@ def prepare_attachment(uploaded_file):
         if hasattr(uploaded_file, "tell"):
             original_position = uploaded_file.tell()
 
-        validate_attachment(uploaded_file)
-        extension = Path(getattr(uploaded_file, "name", "")).suffix.lower()
+        # One bounded read and one validation pass serve both branches.
+        extension, content = read_validated_attachment(uploaded_file)
 
         if extension == ".pdf":
-            uploaded_file.seek(0)
             return PreparedAttachment(
-                content=uploaded_file.read(),
+                content=content,
                 filename=f"{uuid4()}.pdf",
                 content_type="application/pdf",
             )
 
-        processed = optimize_image_attachment(uploaded_file)
+        processed = optimize_validated_image_content(content)
         return PreparedAttachment(
             content=processed.content,
             filename=f"{uuid4()}{processed.extension}",

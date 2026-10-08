@@ -1,13 +1,14 @@
-from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.files.base import ContentFile
 from rest_framework import serializers
 
-from config.attachment_preparation import prepare_attachment
+from config.attachment_serializers import PreparedAttachmentSerializerMixin
 
 from .models import Homework
 
 
-class HomeworkSerializer(serializers.ModelSerializer):
+class HomeworkSerializer(
+    PreparedAttachmentSerializerMixin,
+    serializers.ModelSerializer,
+):
     teacher_display = serializers.SerializerMethodField()
 
     academic_year_display = serializers.CharField(
@@ -67,19 +68,6 @@ class HomeworkSerializer(serializers.ModelSerializer):
     def get_teacher_display(self, obj):
         teacher = obj.teacher_assignment.teacher
         return teacher.get_full_name() or teacher.username
-
-    def validate_attachment(self, uploaded_file):
-        if uploaded_file is None:
-            return None
-
-        try:
-            prepared = prepare_attachment(uploaded_file)
-        except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.messages) from exc
-
-        attachment = ContentFile(prepared.content, name=prepared.filename)
-        attachment.content_type = prepared.content_type
-        return attachment
 
     def validate(self, attrs):
         instance = self.instance
