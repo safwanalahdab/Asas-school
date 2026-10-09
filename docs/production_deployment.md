@@ -21,8 +21,9 @@ Internet
 
 Supporting services:
 
-- Redis on `127.0.0.1:6379` is Django's shared default cache and shares login
-  throttle counters across Gunicorn workers.
+- Django's shared default cache is `DatabaseCache` stored in the PostgreSQL
+  table `asas_cache`. Every Gunicorn worker uses the same table, so login and
+  other DRF throttle counters are shared across workers. There is no Redis.
 - Media is stored on disk at `/var/www/asas/media` and served by Nginx under
   `/media/`. It is currently public to anyone who knows a file URL.
 - Static assets are collected into `staticfiles/` and served by WhiteNoise.
@@ -40,7 +41,7 @@ Install the Ubuntu packages appropriate for the selected Ubuntu release:
 
 ```bash
 sudo apt update
-sudo apt install python3 python3-venv python3-pip postgresql redis-server nginx git
+sudo apt install python3 python3-venv python3-pip postgresql nginx git
 ```
 
 The repository pins Django `5.2.16` and Gunicorn `26.0.0`. Select the Ubuntu
@@ -119,7 +120,6 @@ DB_HOST=127.0.0.1
 DB_PORT=5432
 DB_SSLMODE=<disable_or_prefer_for_reviewed_local_connection>
 
-REDIS_URL=redis://127.0.0.1:6379/1
 MEDIA_ROOT=/var/www/asas/media
 ```
 
@@ -182,28 +182,81 @@ migration plan:
 
 ```bash
 /var/www/asas/venv/bin/python /var/www/asas/backend/manage.py migrate --settings=config.production_settings
+/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py createcachetable --settings=config.production_settings
 ```
 
-## 6. Redis
+The second command creates the `asas_cache` table; see section 6.
 
-Redis must listen on loopback only, with port 6379 blocked externally. Review
-the Ubuntu Redis configuration and confirm its bind/protected-mode settings.
+## 6. Cache (PostgreSQL DatabaseCache)
+
+Production uses Django's `DatabaseCache` as the `default` cache. It lives in
+the same PostgreSQL database as the application, in the table `asas_cache`.
+No separate cache service is installed or required.
+
+```python
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "asas_cache",
+        "TIMEOUT": 300,
+        "KEY_PREFIX": "asas",
+        "OPTIONS": {"MAX_ENTRIES": 300, "CULL_FREQUENCY": 3},
+    },
+}
+```
+
+Create the table after `migrate` and before restarting Gunicorn, on the first
+deployment and as a mandatory step of every later deployment:
 
 ```bash
-sudo systemctl enable --now redis-server
-sudo systemctl status redis-server
-redis-cli -h 127.0.0.1 ping
+/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py createcachetable --settings=config.production_settings
 ```
 
-The last command must return `PONG`. Django uses
-`redis://127.0.0.1:6379/1` as the `default` cache with key prefix `asas` and a
-300-second default timeout. Login throttle scopes remain `5/minute` for Web
-and Mobile and share their counters across workers.
+- `createcachetable` is not a Django migration. `migrate` does not create the
+  table, and it does not appear in `showmigrations`.
+- The command is idempotent: if `asas_cache` already exists it does nothing.
+  It only creates the table; it never cleans, resets, or resizes it.
+- If the table is missing, every endpoint that uses throttling (Web Login,
+  Mobile Login, Mobile school requests, Mobile device registration and
+  unregistration) fails with HTTP 500 instead of serving or throttling the
+  request.
+- All Gunicorn workers share this one table, so throttle counters are shared
+  across workers. There is intentionally no production fallback to
+  per-worker local memory.
 
-Redis failure affects cache and throttling and can surface as application
-errors. Monitor it and alert on service failure, connection errors, memory
-pressure, and unexpected evictions. There is intentionally no silent
-production fallback to per-worker local memory.
+Throttle scopes and rates are unchanged: `web_login` `5/minute`,
+`mobile_login` `5/minute`, `mobile_school_request_burst` `3/minute`,
+`mobile_school_request_hourly` `5/hour`, `mobile_device_registration`
+`10/minute`, and `mobile_device_unregistration` `10/minute`. Throttled
+requests return HTTP 429 with code `TOO_MANY_REQUESTS`.
+
+Verify that the table exists and that reads and writes work:
+
+```bash
+sudo -u postgres psql -d <DATABASE_NAME> -c "SELECT to_regclass('public.asas_cache');"
+
+/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py shell --settings=config.production_settings -c "from django.core.cache import cache; cache.set('deploy-check', 'ok', 30); assert cache.get('deploy-check') == 'ok'; cache.delete('deploy-check'); print('cache ok')"
+```
+
+The first command must print `asas_cache`, not an empty value. The second must
+print `cache ok`. Run the second command with the production environment
+loaded as in the deployment procedure.
+
+Known limitations:
+
+- DRF throttling reads the request history, then writes it back. Concurrent
+  requests from the same client can read the same history before either
+  writes, so a burst may let slightly more than the configured number of
+  requests through. Rate limiting is a best-effort control, not a strict
+  guarantee under concurrent requests. This was also true with the previous
+  cache backend.
+- Expired entries are deleted only opportunistically: Django culls when an
+  entry is written and the table holds more than `MAX_ENTRIES` (300) rows,
+  removing roughly one third (`CULL_FREQUENCY=3`). Monitor the row count and
+  table size of `asas_cache` (see Monitoring). `createcachetable` cannot be
+  used to clean it.
+- Cache reads and writes add small queries to PostgreSQL. A PostgreSQL outage
+  affects the cache and the application together.
 
 ## 7. Gunicorn and systemd
 
@@ -216,8 +269,8 @@ Create `/etc/systemd/system/asas-backend.service`:
 ```ini
 [Unit]
 Description=Asas Django backend
-After=network.target postgresql.service redis-server.service
-Wants=postgresql.service redis-server.service
+After=network.target postgresql.service
+Wants=postgresql.service
 
 [Service]
 Type=simple
@@ -302,6 +355,12 @@ server {
 }
 ```
 
+`X-Real-IP` and `X-Forwarded-For` are set to `$remote_addr`, replacing any
+value supplied by the client. Do not change them to
+`$proxy_add_x_forwarded_for`: with `NUM_PROXIES=1` Django takes the client IP
+used for throttling from this header, and an appended client-controlled value
+would let clients evade or redirect rate limits.
+
 The `^~ /media/` static alias is never proxied to an interpreter or FastCGI
 handler, directory listing is disabled, and `nosniff` prevents browser MIME
 guessing. `Content-Disposition: inline` preserves current image/PDF opening in
@@ -365,7 +424,7 @@ sudo ufw status verbose
 sudo ufw enable
 ```
 
-Do not allow 5432, 6379, or a Gunicorn TCP port publicly. Gunicorn uses a Unix
+Do not allow 5432 or a Gunicorn TCP port publicly. Gunicorn uses a Unix
 socket. Also verify provider-level firewall/security-group rules; UFW is not a
 substitute for them.
 
@@ -394,6 +453,8 @@ set +a
 
 /var/www/asas/venv/bin/python manage.py check --deploy --settings=config.production_settings
 /var/www/asas/venv/bin/python manage.py migrate --settings=config.production_settings
+# Mandatory: creates the cache table if missing. Not a migration; see section 6.
+/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py createcachetable --settings=config.production_settings
 /var/www/asas/venv/bin/python manage.py collectstatic --noinput --settings=config.production_settings
 ```
 
@@ -402,8 +463,7 @@ Then:
 ```bash
 sudo install -d -o asas -g www-data -m 2750 /var/www/asas/media
 sudo systemctl status postgresql
-sudo systemctl status redis-server
-redis-cli -h 127.0.0.1 ping
+sudo -u postgres psql -d <DATABASE_NAME> -c "SELECT to_regclass('public.asas_cache');"
 sudo systemctl restart asas-backend
 sudo nginx -t
 sudo systemctl reload nginx
@@ -458,7 +518,10 @@ Monitor at minimum:
 - Gunicorn failures, restarts, timeouts, worker saturation, and journal errors.
 - Nginx latency, 4xx/5xx rates, upload rejections, and log rotation.
 - PostgreSQL availability, connections, locks, storage, and backup status.
-- Redis availability, memory, evictions, and `PONG` checks.
+- `asas_cache` table existence, row count, and table size (for example
+  `SELECT count(*) FROM asas_cache;` and
+  `SELECT pg_size_pretty(pg_total_relation_size('asas_cache'));`), and HTTP 500
+  responses on login or other throttled endpoints.
 - Firebase push failures when enabled.
 - HTTP 429 rate and unexpected login-throttle changes.
 - TLS expiry and Certbot renewal status.
@@ -468,7 +531,7 @@ Useful built-in commands:
 
 ```bash
 sudo journalctl -u asas-backend --since "1 hour ago"
-sudo systemctl status asas-backend nginx postgresql redis-server
+sudo systemctl status asas-backend nginx postgresql
 sudo tail -f /var/log/nginx/asas_error.log
 df -h
 df -i
@@ -487,7 +550,8 @@ Complete this checklist from controlled Web, Mobile, and server clients:
 - [ ] Mobile Login works at `/api/v1/auth/mobile/login/` and returns the mobile
       token contract.
 - [ ] Six controlled invalid login attempts within one minute produce 429 on
-      the sixth request for both login scopes; repeat across workers.
+      the sixth request for both login scopes, with code `TOO_MANY_REQUESTS`;
+      repeat across workers. Counters are shared through `asas_cache`.
 - [ ] `/api/schema/`, `/api/docs/`, and `/api/redoc/` each return 404.
 - [ ] A valid Homework image uploads, becomes a UUID-named WebP, and downloads.
 - [ ] An image over 25,000,000 pixels is rejected without a stored orphan.
@@ -497,7 +561,8 @@ Complete this checklist from controlled Web, Mobile, and server clients:
 - [ ] An XLSX student import works and the source workbook is not stored under
       `/var/www/asas/media`.
 - [ ] PostgreSQL data survives an application and database service restart.
-- [ ] `redis-cli -h 127.0.0.1 ping` returns `PONG`.
+- [ ] `SELECT to_regclass('public.asas_cache');` returns `asas_cache` and the
+      cache read/write check from section 6 prints `cache ok`.
 - [ ] A Firebase notification is delivered when Firebase is enabled.
 - [ ] Media files survive Gunicorn restart and a subsequent deployment.
 

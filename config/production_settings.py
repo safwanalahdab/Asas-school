@@ -323,16 +323,17 @@ ALLOWED_HOSTS = read_production_hosts("ALLOWED_HOSTS")
 # Shared cache and client IP handling
 # =========================================================
 
-REDIS_URL = require_setting("REDIS_URL")
-
+# PostgreSQL-backed cache shared by every Gunicorn worker. The table must be
+# created with `manage.py createcachetable` on each deployment (not a migration).
 CACHES = {
     "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": REDIS_URL,
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "asas_cache",
         "TIMEOUT": 300,
         "KEY_PREFIX": "asas",
         "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "MAX_ENTRIES": 300,
+            "CULL_FREQUENCY": 3,
         },
     },
 }

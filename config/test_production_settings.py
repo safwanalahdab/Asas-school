@@ -43,7 +43,6 @@ MANAGED_ENVIRONMENT_VARIABLES = {
     "CSRF_COOKIE_SAMESITE",
     "MEDIA_ROOT",
     "MEDIA_URL",
-    "REDIS_URL",
 }
 
 # قيم اختبارية وهمية فقط.
@@ -64,7 +63,6 @@ VALID_PRODUCTION_ENVIRONMENT = {
     "DB_PORT": "5432",
     "DB_SSLMODE": "disable",
     "MEDIA_ROOT": "/srv/test-media",
-    "REDIS_URL": "redis://127.0.0.1:6379/1",
 }
 
 DEVELOPMENT_ENVIRONMENT = {
@@ -342,22 +340,29 @@ class ProductionSettingsValidConfigurationTests(
     def test_firebase_disabled_by_default(self):
         self.assertIs(self.settings["FIREBASE_PUSH_ENABLED"], False)
 
-    def test_default_cache_uses_production_redis(self):
+    def test_default_cache_uses_postgresql_database_cache(self):
         caches = self.settings["CACHES"]
 
         self.assertEqual(set(caches), {"default"})
         self.assertEqual(
             caches["default"],
             {
-                "BACKEND": "django_redis.cache.RedisCache",
-                "LOCATION": "redis://127.0.0.1:6379/1",
+                "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+                "LOCATION": "asas_cache",
                 "TIMEOUT": 300,
                 "KEY_PREFIX": "asas",
                 "OPTIONS": {
-                    "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                    "MAX_ENTRIES": 300,
+                    "CULL_FREQUENCY": 3,
                 },
             },
         )
+
+    def test_production_cache_does_not_use_redis_or_local_memory(self):
+        backend = self.settings["CACHES"]["default"]["BACKEND"]
+
+        self.assertNotIn("redis", backend.lower())
+        self.assertNotIn("locmem", backend.lower())
 
     def test_rest_framework_keeps_inherited_settings_and_sets_one_proxy(self):
         rest_framework = self.settings["REST_FRAMEWORK"]
@@ -505,7 +510,6 @@ class ProductionSettingsValidationTests(
             "DB_PORT",
             "DB_SSLMODE",
             "MEDIA_ROOT",
-            "REDIS_URL",
         ):
             for value in (None, ""):
                 with self.subTest(name=name, value=value):
@@ -644,13 +648,6 @@ class ProductionSettingsValidationTests(
         )
         for secret in (TEST_SECRET_KEY, TEST_JWT_SIGNING_KEY, TEST_DB_PASSWORD):
             self.assertNotIn(secret, result["raw_output"])
-
-        result = self.assert_rejected("REDIS_URL", REDIS_URL="")
-        self.assertEqual(
-            result["error"],
-            "REDIS_URL is required in production.",
-        )
-        self.assertNotIn("redis://", result["raw_output"])
 
 
 class BaseSettingsUnchangedTests(SimpleTestCase):
