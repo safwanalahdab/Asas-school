@@ -8,8 +8,8 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from academics.models import SupervisorScope
-from students.models import GuardianStudent, Student
+from academics.models import AcademicYear, GradeLevel, Section, SupervisorScope
+from students.models import Enrollment, GuardianStudent, Student
 
 from .mobile_throttles import MobileSchoolRequestBurstThrottle
 from .models import SchoolRequest
@@ -244,8 +244,8 @@ class MobileSchoolRequestTests(TestCase):
         self.assertTrue(required.issubset(data))
         self.assertTrue(forbidden.isdisjoint(self.recursive_keys(data)))
 
-    def answer_with_web_role(self, user):
-        school_request = self.create_request()
+    def answer_with_web_role(self, user, **request_kwargs):
+        school_request = self.create_request(**request_kwargs)
         web_client = APIClient()
         web_client.force_authenticate(user=user)
         response = web_client.post(
@@ -274,7 +274,25 @@ class MobileSchoolRequestTests(TestCase):
         SupervisorScope.objects.create(
             supervisor=self.supervisor, scope_type=SupervisorScope.ScopeType.ALL
         )
-        self.answer_with_web_role(self.supervisor)
+        # Even an ALL-scope supervisor only sees requests for students enrolled
+        # in the active year (see school_requests.test_supervisor_scope).
+        active_year = AcademicYear.objects.create(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31),
+            status=AcademicYear.Status.ACTIVE,
+        )
+        grade = GradeLevel.objects.create(
+            stage=GradeLevel.Stage.PRIMARY, name="Request primary"
+        )
+        Enrollment.objects.create(
+            student=self.student,
+            academic_year=active_year,
+            section=Section.objects.create(
+                academic_year=active_year, grade_level=grade, name="A"
+            ),
+            enrollment_date=date(2026, 1, 1),
+        )
+        self.answer_with_web_role(self.supervisor, student=self.student)
         self.answer_with_web_role(self.secretariat)
 
     def test_mobile_has_no_answer_update_or_delete_capability(self):

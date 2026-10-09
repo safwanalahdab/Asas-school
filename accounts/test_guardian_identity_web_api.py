@@ -99,8 +99,17 @@ class GuardianIdentityWebApiTests(TestCase):
         )
         self.authenticate(supervisor)
 
-        self.assertEqual(self.results_for(self.teacher.national_id), [])
-        self.assertEqual(self.results_for(self.teacher.phone_number), [])
+        # A guardian is visible to a supervisor only through an in-scope student
+        # link, so identity search must not reveal this unlinked guardian.
+        self.assertEqual(self.results_for(self.guardian.national_id), [])
+        self.assertEqual(self.results_for(self.guardian.phone_number), [])
+        # Teacher accounts are visible to supervisors regardless of stage scope.
+        for search in (self.teacher.national_id, self.teacher.phone_number):
+            with self.subTest(search=search):
+                self.assertEqual(
+                    [item["id"] for item in self.results_for(search)],
+                    [str(self.teacher.pk)],
+                )
 
     def test_login_and_web_me_do_not_expose_identity_fields(self):
         self.admin.national_id = "1111222233"

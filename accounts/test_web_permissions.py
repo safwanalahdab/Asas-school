@@ -60,12 +60,15 @@ class AccountsWebAuthorizationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["data"]["count"], 0)
 
+        # Supervisors see teacher accounts regardless of stage scope, while an
+        # unlinked guardian stays hidden despite accounts.view_user.
         self.authenticate(self.supervisor)
         response = self.client.get(self.users_url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            {item["role"] for item in response.data["data"]["results"]},
-            {User.Role.GUARDIAN},
+        results = response.data["data"]["results"]
+        self.assertEqual({item["role"] for item in results}, {User.Role.TEACHER})
+        self.assertNotIn(
+            self.guardian.username, {item["username"] for item in results}
         )
 
         self.authenticate(self.secretariat)
