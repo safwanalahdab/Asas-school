@@ -13,10 +13,14 @@ from .mobile_selectors import (
 )
 from .mobile_serializers import (
     MobileChildDetailResponseSerializer,
+    MobileChildHealthProfileResponseSerializer,
+    MobileChildHealthProfileSerializer,
+    MobileChildHealthStudentSerializer,
     MobileChildSerializer,
     MobileChildrenErrorResponseSerializer,
     MobileChildrenListResponseSerializer,
 )
+from .models import StudentHealthProfile
 
 
 class MobileChildrenListView(
@@ -116,5 +120,54 @@ class MobileChildDetailView(
                 "code": "MOBILE_CHILD_RETRIEVED",
                 "detail": "تم جلب بيانات الطالب بنجاح.",
                 "data": serializer.data,
+            }
+        )
+
+
+class MobileChildHealthProfileView(
+    ArabicApiResponseMixin,
+    APIView,
+):
+    authentication_classes = [
+        MobileJWTAuthentication,
+    ]
+
+    permission_classes = [
+        IsAuthenticated,
+        IsMobileGuardian,
+    ]
+
+    http_method_names = ["get", "head", "options"]
+
+    @extend_schema(
+        responses={
+            200: MobileChildHealthProfileResponseSerializer,
+            401: MobileChildrenErrorResponseSerializer,
+            403: MobileChildrenErrorResponseSerializer,
+            404: MobileChildrenErrorResponseSerializer,
+        },
+        description="جلب الملف الصحي لابن ولي الأمر الحالي للقراءة فقط.",
+    )
+    def get(self, request, student_id):
+        student = get_guardian_child_or_404(
+            guardian=request.user,
+            student_id=student_id,
+        )
+        health_profile = StudentHealthProfile.objects.filter(
+            student=student,
+        ).first()
+
+        return Response(
+            {
+                "code": "MOBILE_CHILD_HEALTH_PROFILE_RETRIEVED",
+                "detail": "تم جلب الملف الصحي للطالب بنجاح.",
+                "data": {
+                    "student": MobileChildHealthStudentSerializer(student).data,
+                    "health_profile": (
+                        MobileChildHealthProfileSerializer(health_profile).data
+                        if health_profile is not None
+                        else None
+                    ),
+                },
             }
         )

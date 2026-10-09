@@ -8,7 +8,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from academics.models import AcademicYear, GradeLevel, Section
 
 from .mobile_selectors import get_guardian_children_queryset
-from .models import Enrollment, GuardianStudent, Student
+from .models import Enrollment, GuardianStudent, Student, StudentHealthProfile
 
 
 User = get_user_model()
@@ -188,6 +188,150 @@ class MobileChildrenApiTests(TestCase):
             f"/api/v1/mobile/children/"
             f"{student.pk}/"
         )
+
+    def health_profile_url(self, student):
+        return f"{self.detail_url(student)}health-profile/"
+
+    def test_guardian_can_retrieve_own_child_health_profile(self):
+        profile = StudentHealthProfile.objects.create(
+            student=self.child_with_current_enrollment,
+            blood_type="O+",
+            allergies="Penicillin",
+            health_notes="Follow up",
+        )
+        self.authenticate()
+
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["code"],
+            "MOBILE_CHILD_HEALTH_PROFILE_RETRIEVED",
+        )
+        self.assertEqual(
+            response.data["data"]["student"],
+            {
+                "id": str(self.child_with_current_enrollment.id),
+                "full_name": self.child_with_current_enrollment.full_name,
+            },
+        )
+        self.assertEqual(
+            response.data["data"]["health_profile"]["blood_type"],
+            profile.blood_type,
+        )
+
+    def test_other_family_child_health_profile_returns_404(self):
+        StudentHealthProfile.objects.create(
+            student=self.other_family_child,
+            blood_type="A-",
+        )
+        self.authenticate()
+
+        response = self.client.get(
+            self.health_profile_url(self.other_family_child)
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data["code"], "MOBILE_CHILD_NOT_FOUND")
+
+    def test_missing_health_profile_returns_null(self):
+        self.authenticate()
+
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["data"]["health_profile"])
+
+    def test_health_profile_exposes_only_mobile_fields(self):
+        StudentHealthProfile.objects.create(
+            student=self.child_with_current_enrollment,
+            blood_type="AB+",
+        )
+        self.authenticate()
+
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(
+            set(response.data["data"]["health_profile"]),
+            {
+                "blood_type",
+                "chronic_diseases",
+                "allergies",
+                "permanent_medications",
+                "special_health_needs",
+                "emergency_contact_name",
+                "emergency_contact_phone",
+                "health_notes",
+            },
+        )
+        self.assertEqual(
+            set(response.data["data"]["student"]),
+            {"id", "full_name"},
+        )
+
+    def test_health_profile_requires_authentication(self):
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_health_profile_honors_password_change_gate(self):
+        self.guardian.must_change_password = True
+        self.guardian.save(update_fields=["must_change_password"])
+        self.authenticate()
+
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "PASSWORD_CHANGE_REQUIRED")
+
+    def test_health_profile_rejects_web_token(self):
+        self.authenticate(client="web")
+
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_health_profile_write_methods_are_not_allowed(self):
+        self.authenticate()
+        url = self.health_profile_url(self.child_with_current_enrollment)
+
+        for method in ("post", "put", "patch", "delete"):
+            response = getattr(self.client, method)(url, {}, format="json")
+            self.assertEqual(response.status_code, 405)
+
+    def test_health_profile_does_not_leak_another_student_data(self):
+        StudentHealthProfile.objects.create(
+            student=self.child_with_current_enrollment,
+            health_notes="Own child note",
+        )
+        StudentHealthProfile.objects.create(
+            student=self.other_family_child,
+            health_notes="Other family secret",
+        )
+        self.authenticate()
+
+        response = self.client.get(
+            self.health_profile_url(self.child_with_current_enrollment)
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["data"]["health_profile"]["health_notes"],
+            "Own child note",
+        )
+        self.assertNotIn("Other family secret", str(response.data))
 
     def test_guardian_sees_only_active_owned_children(self):
         self.authenticate()

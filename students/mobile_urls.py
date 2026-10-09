@@ -2,6 +2,7 @@ from django.urls import include, path
 
 from .mobile_views import (
     MobileChildDetailView,
+    MobileChildHealthProfileView,
     MobileChildrenListView,
 )
 
@@ -30,6 +31,11 @@ urlpatterns = [
         "children/",
         MobileChildrenListView.as_view(),
         name="children-list",
+    ),
+    path(
+        "children/<uuid:student_id>/health-profile/",
+        MobileChildHealthProfileView.as_view(),
+        name="children-health-profile",
     ),
     path(
         "children/<uuid:student_id>/",

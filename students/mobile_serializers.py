@@ -9,6 +9,7 @@ from academics.models import (
 from .models import (
     Enrollment,
     Student,
+    StudentHealthProfile,
 )
 
 
@@ -168,6 +169,42 @@ class MobileChildSerializer(serializers.ModelSerializer):
         ).data
 
 
+class MobileChildHealthStudentSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Student
+        fields = (
+            "id",
+            "full_name",
+        )
+        read_only_fields = fields
+
+
+class MobileChildHealthProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentHealthProfile
+        fields = (
+            "blood_type",
+            "chronic_diseases",
+            "allergies",
+            "permanent_medications",
+            "special_health_needs",
+            "emergency_contact_name",
+            "emergency_contact_phone",
+            "health_notes",
+        )
+        read_only_fields = fields
+
+
+class MobileChildHealthProfileDataSerializer(serializers.Serializer):
+    student = MobileChildHealthStudentSerializer(read_only=True)
+    health_profile = MobileChildHealthProfileSerializer(
+        read_only=True,
+        allow_null=True,
+    )
+
+
 class MobileChildrenResponseMetaSerializer(serializers.Serializer):
     """
     يمثل meta الذي يضيفه ArabicApiResponseMixin.
@@ -223,6 +260,16 @@ class MobileChildDetailResponseSerializer(
     )
 
     data = MobileChildSerializer()
+
+
+class MobileChildHealthProfileResponseSerializer(
+    MobileChildrenSuccessEnvelopeSerializer
+):
+    code = serializers.CharField(
+        default="MOBILE_CHILD_HEALTH_PROFILE_RETRIEVED",
+    )
+
+    data = MobileChildHealthProfileDataSerializer()
 
 
 class MobileChildrenErrorResponseSerializer(serializers.Serializer):
