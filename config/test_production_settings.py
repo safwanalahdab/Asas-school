@@ -114,6 +114,8 @@ INSPECTED_SETTINGS = [
     "MEDIA_ROOT",
     "FIREBASE_PUSH_ENABLED",
     "FIREBASE_PROJECT_ID",
+    "API_DOCS_ENABLED",
+    "SPECTACULAR_SETTINGS",
     "CACHES",
     "REST_FRAMEWORK",
 ]
@@ -235,6 +237,19 @@ class ProductionSettingsValidConfigurationTests(
 
     def test_debug_is_false(self):
         self.assertIs(self.settings["DEBUG"], False)
+
+    def test_api_documentation_is_disabled(self):
+        self.assertIs(self.settings["API_DOCS_ENABLED"], False)
+        self.assertEqual(
+            self.settings["SPECTACULAR_SETTINGS"],
+            {
+                "TITLE": "Asas School Academic API",
+                "DESCRIPTION": "واجهة برمجة تطبيقات منصة مدرسة أساس الأكاديمية",
+                "VERSION": "1.0.0",
+                "SERVE_INCLUDE_SCHEMA": False,
+                "COMPONENT_SPLIT_REQUEST": True,
+            },
+        )
 
     def test_exact_origins_are_accepted(self):
         self.assertEqual(self.settings["ALLOWED_HOSTS"], ["api.example.com"])
@@ -646,6 +661,7 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
         self.assertIs(result["production_settings_loaded"], False)
         settings = result["settings"]
         self.assertIs(settings["DEBUG"], True)
+        self.assertIs(settings["API_DOCS_ENABLED"], True)
         self.assertEqual(settings["ALLOWED_HOSTS"], ["127.0.0.1", "localhost"])
         self.assertEqual(
             settings["CORS_ALLOWED_ORIGIN_REGEXES"],
@@ -670,6 +686,7 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
 
         self.assertNotIn("error", result, result.get("error"))
         self.assertIs(result["production_settings_loaded"], False)
+        self.assertIs(result["settings"]["API_DOCS_ENABLED"], True)
         self.assertEqual(
             result["database"],
             {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},

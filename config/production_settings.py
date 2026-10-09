@@ -288,6 +288,7 @@ if env.bool("DEBUG", default=False):
     )
 
 DEBUG = False
+API_DOCS_ENABLED = False
 
 _integer_settings = validate_integer_settings()
 

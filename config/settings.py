@@ -529,6 +529,8 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 # API documentation
 # =========================================================
 
+API_DOCS_ENABLED = True
+
 SPECTACULAR_SETTINGS = {
     "TITLE": "Asas School Academic API",
     "DESCRIPTION": ("واجهة برمجة تطبيقات منصة مدرسة أساس الأكاديمية"),
