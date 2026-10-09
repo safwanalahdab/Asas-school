@@ -251,27 +251,6 @@ def read_media_root(name):
     return str(path)
 
 
-def read_media_url(name, *, static_url):
-    value = env.str(name, default="/media/").strip()
-
-    if (
-        len(value) < 3
-        or not value.startswith("/")
-        or not value.endswith("/")
-        or value.startswith("//")
-        or any(character in value for character in "?#* ")
-    ):
-        raise ImproperlyConfigured(
-            f"{name} must be a path that starts and ends with '/', "
-            "for example /media/."
-        )
-
-    if value == static_url:
-        raise ImproperlyConfigured(f"{name} must differ from STATIC_URL.")
-
-    return value
-
-
 # =========================================================
 # Base settings
 # =========================================================
@@ -293,7 +272,6 @@ if _base_settings_failed:
 
 from config.settings import (  # noqa: E402
     DATABASES,
-    STATIC_URL,
     env,
     normalize_origins,
     read_samesite_setting,
@@ -467,7 +445,7 @@ STORAGES = {
 # Nginx يخدم الملفات من MEDIA_ROOT؛ Django لا يضيف route لها.
 # إنشاء المجلد وصلاحياته مسؤولية DevOps.
 MEDIA_ROOT = read_media_root("MEDIA_ROOT")
-MEDIA_URL = read_media_url("MEDIA_URL", static_url=STATIC_URL)
+MEDIA_URL = "/media/"
 
 
 # =========================================================

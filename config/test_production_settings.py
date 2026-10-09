@@ -510,14 +510,9 @@ class ProductionSettingsValidationTests(
             with self.subTest(value=value):
                 self.assert_rejected("MEDIA_ROOT", MEDIA_ROOT=value)
 
-    def test_invalid_media_url_is_rejected(self):
-        for value in ("media/", "/media", "/", "//cdn.example.com/", "/static/"):
-            with self.subTest(value=value):
-                self.assert_rejected("MEDIA_URL", MEDIA_URL=value)
-
-    def test_custom_media_url_is_accepted(self):
+    def test_media_url_stays_fixed(self):
         settings = self.assert_loads(MEDIA_URL="/uploads/")
-        self.assertEqual(settings["MEDIA_URL"], "/uploads/")
+        self.assertEqual(settings["MEDIA_URL"], "/media/")
 
     def test_invalid_db_port_is_rejected(self):
         for value in ("abc", "0", "65536", "-1", "54.32"):
@@ -628,6 +623,10 @@ class ProductionSettingsValidationTests(
         self.assertNotIn(TEST_DB_PASSWORD, result["raw_output"])
 
         result = self.assert_rejected("MEDIA_ROOT", MEDIA_ROOT="")
+        self.assertEqual(
+            result["error"],
+            "MEDIA_ROOT is required in production.",
+        )
         for secret in (TEST_SECRET_KEY, TEST_JWT_SIGNING_KEY, TEST_DB_PASSWORD):
             self.assertNotIn(secret, result["raw_output"])
 
@@ -657,7 +656,8 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
         self.assertIs(settings["JWT_COOKIE_SECURE"], False)
         self.assertEqual(settings["JWT_COOKIE_SAMESITE"], "Lax")
         self.assertNotIn("STORAGES", settings)
-        self.assertNotIn("MEDIA_ROOT", settings)
+        self.assertEqual(settings["MEDIA_ROOT"], str(BASE_DIR / "media"))
+        self.assertEqual(settings["MEDIA_URL"], "/media/")
         self.assertNotIn("CACHES", settings)
         self.assertNotIn("NUM_PROXIES", settings["REST_FRAMEWORK"])
         self.assertEqual(result["database"]["OPTIONS"], {"sslmode": "disable"})
@@ -678,6 +678,11 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
             result["settings"]["CORS_ALLOWED_ORIGIN_REGEXES"],
             [r"^https://[A-Za-z0-9-]+\.vercel\.app$"],
         )
+        self.assertEqual(
+            result["settings"]["MEDIA_ROOT"],
+            str(BASE_DIR / "media"),
+        )
+        self.assertEqual(result["settings"]["MEDIA_URL"], "/media/")
         self.assertNotIn("CACHES", result["settings"])
         self.assertNotIn(
             "NUM_PROXIES",

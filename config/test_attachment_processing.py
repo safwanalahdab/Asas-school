@@ -1,4 +1,5 @@
 import io
+from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -6,8 +7,11 @@ from django.test import SimpleTestCase
 from PIL import Image, features
 
 from config.attachment_processing import (
+    IMAGE_PIXEL_LIMIT_ERROR,
+    MAX_ATTACHMENT_IMAGE_PIXELS,
     MAX_IMAGE_DIMENSION,
     WEBP_QUALITY,
+    optimize_validated_image_content,
     optimize_image_attachment,
 )
 
@@ -60,6 +64,30 @@ class AttachmentProcessingTests(SimpleTestCase):
 
         with self.output_image(result) as image:
             self.assertEqual(image.size, (1920, 960))
+
+    def test_image_within_pixel_limit_continues_normal_processing(self):
+        result = self.process_image("within-limit.png", "PNG", (2400, 1200))
+
+        with self.output_image(result) as image:
+            self.assertEqual(image.format, "WEBP")
+            self.assertEqual(image.size, (1920, 960))
+
+    def test_image_over_pixel_limit_is_rejected_before_heavy_processing(self):
+        source = MagicMock()
+        source.__enter__.return_value = source
+        source.width = 5001
+        source.height = 5000
+
+        with patch.object(Image, "open", return_value=source):
+            with patch("config.attachment_processing.ImageOps.exif_transpose") as transpose:
+                with self.assertRaisesMessage(
+                    ValidationError,
+                    IMAGE_PIXEL_LIMIT_ERROR,
+                ):
+                    optimize_validated_image_content(b"image metadata only")
+
+        transpose.assert_not_called()
+        source.load.assert_not_called()
 
     def test_large_portrait_jpeg_resizes_to_longest_side(self):
         result = self.process_image("portrait.jpeg", "JPEG", (1200, 2400))
@@ -169,4 +197,5 @@ class AttachmentProcessingTests(SimpleTestCase):
 
     def test_processing_policy_constants(self):
         self.assertEqual(MAX_IMAGE_DIMENSION, 1920)
+        self.assertEqual(MAX_ATTACHMENT_IMAGE_PIXELS, 25_000_000)
         self.assertEqual(WEBP_QUALITY, 85)

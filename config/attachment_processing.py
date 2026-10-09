@@ -9,7 +9,12 @@ from config.attachment_validation import read_validated_attachment
 
 
 MAX_IMAGE_DIMENSION = 1920
+MAX_ATTACHMENT_IMAGE_PIXELS = 25_000_000
 WEBP_QUALITY = 85
+
+IMAGE_PIXEL_LIMIT_ERROR = (
+    "عدد بكسلات الصورة يتجاوز الحد الأقصى المسموح وهو 25 مليون بكسل."
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,9 @@ def optimize_validated_image_content(content):
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(io.BytesIO(content)) as source:
+                if source.width * source.height > MAX_ATTACHMENT_IMAGE_PIXELS:
+                    raise ValidationError(IMAGE_PIXEL_LIMIT_ERROR)
+
                 # In place avoids a full extra copy when there is no rotation.
                 ImageOps.exif_transpose(source, in_place=True)
                 source.load()
@@ -81,4 +89,3 @@ def optimize_image_attachment(uploaded_file):
                 uploaded_file.seek(original_position)
             except (AttributeError, OSError, ValueError):
                 pass
-

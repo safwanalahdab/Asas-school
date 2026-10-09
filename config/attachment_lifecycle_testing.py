@@ -13,12 +13,14 @@ from uuid import UUID
 from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.test import override_settings
 from PIL import Image
 from rest_framework.serializers import ModelSerializer
 
 from config import attachment_serializers
+from config.attachment_processing import IMAGE_PIXEL_LIMIT_ERROR
 from config.attachment_storage import delete_attachment_on_commit
 
 
@@ -98,6 +100,22 @@ class AttachmentLifecycleTestsMixin:
         return patch.object(ModelSerializer, "update", update_then_fail)
 
     # 1. Invalid uploads
+
+    def test_oversized_image_is_rejected_without_storing_a_file(self):
+        with patch(
+            "config.attachment_preparation.optimize_validated_image_content",
+            side_effect=ValidationError(IMAGE_PIXEL_LIMIT_ERROR),
+        ):
+            response = self.create(self.image_upload("oversized.png"))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("attachment", response.data["errors"])
+        self.assertIn(
+            IMAGE_PIXEL_LIMIT_ERROR,
+            str(response.data["errors"]["attachment"]),
+        )
+        self.assertEqual(self.model.objects.count(), 0)
+        self.assertEqual(self.stored_files(), [])
 
     def test_invalid_upload_is_rejected_and_stores_nothing(self):
         before = self.model.objects.count()
