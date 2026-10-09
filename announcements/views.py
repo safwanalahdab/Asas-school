@@ -10,8 +10,7 @@ from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from academics.models import AcademicYear
 from academics.models import GradeLevel, Section
 from academics.supervisor_academic_scope import (
-    can_access_grade_level,
-    can_access_section,
+    scope_allows_stage,
     supervisor_academic_scope_for,
 )
 from rest_framework.exceptions import PermissionDenied
@@ -257,11 +256,18 @@ class AnnouncementViewSet(
             grade_levels = list(instance.grade_levels.all()) if instance else []
         if sections is None:
             sections = list(instance.sections.all()) if instance else []
+        # Reuse the loaded scope: grade stages are in memory, and section
+        # stages are checked for all targets in a single query.
         if (
             (announcement_scope == Announcement.Scope.GRADES and not grade_levels)
             or (announcement_scope == Announcement.Scope.SECTIONS and not sections)
-            or any(not can_access_grade_level(user, grade) for grade in grade_levels)
-            or any(not can_access_section(user, section) for section in sections)
+            or any(not scope_allows_stage(scope, grade.stage) for grade in grade_levels)
+            or (
+                sections
+                and Section.objects.filter(
+                    pk__in=[section.pk for section in sections],
+                ).exclude(grade_level__stage__in=scope.stages).exists()
+            )
         ):
             raise PermissionDenied({
                 "code": "SUPERVISOR_ACADEMIC_SCOPE_DENIED",
@@ -278,6 +284,7 @@ class AnnouncementViewSet(
                 created_by=self.request.user,
             )
             notify_announcement_published(announcement)
+        serializer.instance = self._reload_for_response(announcement)
 
     def perform_update(self, serializer):
         # A failed write discards only the new upload and keeps the old
@@ -289,6 +296,14 @@ class AnnouncementViewSet(
             self.require_supervisor_targets(serializer)
             announcement = serializer.save()
             delete_replaced_attachment_on_commit(announcement, previous_name)
+        serializer.instance = self._reload_for_response(announcement)
+
+    def _reload_for_response(self, announcement):
+        # The saved instance has no prefetch cache (UpdateModelMixin also
+        # clears it), so sections_display would lazy-load each grade level.
+        # The unscoped base queryset keeps the response identical for every
+        # role, including announcements not yet visible to their creator.
+        return super().get_queryset().get(pk=announcement.pk)
 
     def perform_destroy(self, instance):
         with transaction.atomic():

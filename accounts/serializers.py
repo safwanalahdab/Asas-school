@@ -85,7 +85,8 @@ class SupervisorScopeField(serializers.Field):
             scope = user.supervisor_scope
         except SupervisorScope.DoesNotExist:
             return None
-        selected = set(scope.stages.values_list("stage", flat=True))
+        # .all() reuses prefetched stages; values_list() would query again.
+        selected = {item.stage for item in scope.stages.all()}
         ordered = [stage for stage in GradeLevel.Stage.values if stage in selected]
         return {
             "scope_type": scope.scope_type,

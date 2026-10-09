@@ -3,7 +3,9 @@ from datetime import timedelta
 
 from django.contrib.auth.models import Permission
 from django.contrib.admin.sites import AdminSite
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
@@ -85,6 +87,33 @@ class SupervisorScopeAccountsTests(TestCase):
             selected.data["data"]["supervisor_scope"]["stages"],
             ["primary", "preparatory"],
         )
+
+    def test_user_list_does_not_add_a_query_per_supervisor_scope(self):
+        selected = {"scope_type": "selected_stages", "stages": ["preparatory", "primary"]}
+
+        def add_supervisors(start, stop):
+            for index in range(start, stop):
+                response = self.create_supervisor(username=f"list-supervisor-{index}", scope=selected)
+                self.assertEqual(response.status_code, 201, response.data)
+
+        def list_supervisors():
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(self.users_url, {"role": User.Role.SUPERVISOR})
+            self.assertEqual(response.status_code, 200)
+            return response, ctx.captured_queries
+
+        add_supervisors(0, 2)
+        list_supervisors()  # warm-up
+        _, small = list_supervisors()
+        add_supervisors(2, 6)
+        response, large = list_supervisors()
+
+        self.assertEqual(len(large), len(small))
+        rows = response.data["data"]["results"]
+        self.assertEqual(len(rows), 6)
+        for row in rows:
+            self.assertEqual(row["supervisor_scope"]["stages"], ["primary", "preparatory"])
+            self.assertEqual(row["supervisor_scope"]["scope_type"], "selected_stages")
 
     def test_create_supervisor_grants_assessment_schedule_publish_permission(self):
         response = self.create_supervisor(username="schedule-publish-supervisor")

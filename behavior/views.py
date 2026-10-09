@@ -16,7 +16,7 @@ from academics.teacher_student_scope import (
 )
 from students.models import Enrollment
 
-from .filters import StudentPointEntryFilter
+from .filters import BehaviorNoteFilter, StudentPointEntryFilter
 from .models import BehaviorNote, StudentPointEntry
 from .permissions import IsWebClientToken
 from .serializers import BehaviorNoteSerializer, StudentPointEntrySerializer
@@ -48,6 +48,7 @@ class BehaviorNoteViewSet(
     )
 
     serializer_class = BehaviorNoteSerializer
+    filterset_class = BehaviorNoteFilter
     action_permissions = {
         "list": "behavior.view_behaviornote",
         "retrieve": "behavior.view_behaviornote",

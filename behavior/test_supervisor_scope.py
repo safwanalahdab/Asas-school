@@ -103,9 +103,11 @@ class BehaviorSupervisorScopeTests(TestCase):
         self.assertEqual(self.ids(self.client.get(self.url)), {str(self.old_note.pk)})
         self.assertEqual(self.client.get(self.detail(self.old_note)).status_code, 200)
         self.assertEqual(self.client.get(self.detail(self.current_note)).status_code, 404)
+        # The enrollment filter now applies, but only inside the scoped
+        # queryset: an out-of-scope enrollment yields nothing, never its notes.
         self.assertEqual(self.ids(self.client.get(self.url, {
             "enrollment": str(self.current_enrollment.pk),
-        })), {str(self.old_note.pk)})
+        })), set())
         self.scope("preparatory")
         self.assertEqual(self.ids(self.client.get(self.url)), {str(self.current_note.pk)})
 

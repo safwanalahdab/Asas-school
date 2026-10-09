@@ -13,9 +13,10 @@ from rest_framework.response import Response
 from accounts.models import User
 from accounts.permissions import ActionBusinessPermission, PasswordChangeGate
 from academics.supervisor_academic_scope import (
-    can_access_enrollment,
     can_access_section,
     filter_queryset_by_stage,
+    scope_allows_stage,
+    supervisor_academic_scope_for,
 )
 from teaching.models import TeacherAssignment
 from config.api_responses import ArabicApiResponseMixin
@@ -48,8 +49,15 @@ SUPERVISOR_ATTENDANCE_SCOPE_DENIED = {
 }
 
 
-def _check_supervisor_section_scope(user, section):
-    if not can_access_section(user, section):
+def _check_supervisor_section_scope(user, section, *, scope=None):
+    """Pass an already-loaded scope to avoid reloading it."""
+    if scope is None:
+        allowed = can_access_section(user, section)
+    elif not scope.applies or scope.allows_all_stages:
+        allowed = True
+    else:
+        allowed = scope_allows_stage(scope, section.grade_level.stage)
+    if not allowed:
         raise PermissionDenied(SUPERVISOR_ATTENDANCE_SCOPE_DENIED)
 
 
@@ -130,14 +138,10 @@ class AttendanceSheetViewSet(
         queryset = super().get_queryset()
 
         if self.action in ("list", "retrieve"):
+            # AttendanceRecordSerializer only reads the student's name; the
+            # sheet is the prefetch parent and other relations are PKs only.
             records_queryset = AttendanceRecord.objects.select_related(
-                "sheet",
-                "sheet__section",
-                "sheet__section__grade_level",
-                "enrollment",
                 "enrollment__student",
-                "enrollment__academic_year",
-                "enrollment__section",
             )
 
             queryset = queryset.prefetch_related(
@@ -190,17 +194,36 @@ class AttendanceSheetViewSet(
             raise_exception=True,
         )
 
+        # Load the supervisor scope once; enrollments arrive with their
+        # section and grade level, so per-record checks stay in memory.
+        scope = supervisor_academic_scope_for(request.user)
         _check_supervisor_section_scope(
             request.user,
             serializer.validated_data["section"],
+            scope=scope,
         )
-        for item in serializer.validated_data["records"]:
-            if not can_access_enrollment(request.user, item["enrollment"]):
-                raise PermissionDenied(SUPERVISOR_ATTENDANCE_SCOPE_DENIED)
+        if scope.applies and not scope.allows_all_stages:
+            for item in serializer.validated_data["records"]:
+                stage = item["enrollment"].section.grade_level.stage
+                if not scope_allows_stage(scope, stage):
+                    raise PermissionDenied(SUPERVISOR_ATTENDANCE_SCOPE_DENIED)
 
         sheet = create_attendance_sheet(
             actor=request.user,
             **serializer.validated_data,
+        )
+
+        # Reload once so the response does not lazy-load each record's
+        # enrollment and student; record order still follows Meta.ordering.
+        sheet = self.queryset.prefetch_related(
+            Prefetch(
+                "records",
+                queryset=AttendanceRecord.objects.select_related(
+                    "enrollment__student",
+                ),
+            )
+        ).get(
+            pk=sheet.pk,
         )
 
         response_serializer = AttendanceSheetSerializer(
@@ -264,13 +287,7 @@ class AttendanceSheetViewSet(
         )
 
         records_queryset = AttendanceRecord.objects.select_related(
-            "sheet",
-            "sheet__section",
-            "sheet__section__grade_level",
-            "enrollment",
             "enrollment__student",
-            "enrollment__academic_year",
-            "enrollment__section",
         )
 
         sheet = AttendanceSheet.objects.prefetch_related(
@@ -319,13 +336,7 @@ class AttendanceSheetViewSet(
         )
 
         records_queryset = AttendanceRecord.objects.select_related(
-            "sheet",
-            "sheet__section",
-            "sheet__section__grade_level",
-            "enrollment",
             "enrollment__student",
-            "enrollment__academic_year",
-            "enrollment__section",
         )
 
         sheet = AttendanceSheet.objects.prefetch_related(

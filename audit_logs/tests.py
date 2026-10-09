@@ -131,6 +131,73 @@ class AuditApiTests(TestCase):
         today = timezone.localdate().isoformat()
         self.assertEqual(len(self.client.get(f"/api/v1/audit-logs/?date_from={today}&date_to={today}").data["data"]["results"]), 1)
 
+    def boundary_events(self):
+        """Finance events around 2026-03-10 in the configured local timezone."""
+        local = timezone.get_current_timezone()
+        moments = {
+            "previous_day_end": datetime(2026, 3, 9, 23, 59, 59, 999999),
+            "day_start": datetime(2026, 3, 10, 0, 0),
+            "day_end": datetime(2026, 3, 10, 23, 59, 59, 999999),
+            "next_day_start": datetime(2026, 3, 11, 0, 0),
+        }
+        events = {}
+        for name, moment in moments.items():
+            event = record_audit_event(
+                actor=self.admin, module=AuditLog.Module.FINANCE,
+                action=AuditLog.Action.CREATE, message=name,
+                target_type="finance.Payment", target_id=name,
+            )
+            AuditLog.objects.filter(pk=event.pk).update(created_at=timezone.make_aware(moment, local))
+            events[name] = str(event.pk)
+        return events
+
+    def filtered_ids(self, **params):
+        response = self.client.get("/api/v1/audit-logs/", {"module": AuditLog.Module.FINANCE, **params})
+        self.assertEqual(response.status_code, 200)
+        return {row["id"] for row in response.data["data"]["results"]}
+
+    def legacy_ids(self, **lookups):
+        """The previous created_at__date semantics, used as the reference result."""
+        return {
+            str(pk) for pk in AuditLog.objects.filter(
+                module=AuditLog.Module.FINANCE, **lookups,
+            ).values_list("pk", flat=True)
+        }
+
+    def test_date_filters_follow_local_day_boundaries(self):
+        self.authenticate(self.admin)
+        events = self.boundary_events()
+        day = date(2026, 3, 10)
+
+        from_ids = self.filtered_ids(date_from=day.isoformat())
+        self.assertEqual(from_ids, {events["day_start"], events["day_end"], events["next_day_start"]})
+        self.assertEqual(from_ids, self.legacy_ids(created_at__date__gte=day))
+
+        to_ids = self.filtered_ids(date_to=day.isoformat())
+        self.assertEqual(to_ids, {events["previous_day_end"], events["day_start"], events["day_end"]})
+        self.assertNotIn(events["next_day_start"], to_ids)
+        self.assertEqual(to_ids, self.legacy_ids(created_at__date__lte=day))
+
+    def test_date_from_and_date_to_together(self):
+        self.authenticate(self.admin)
+        events = self.boundary_events()
+        same_day = self.filtered_ids(date_from="2026-03-10", date_to="2026-03-10")
+        self.assertEqual(same_day, {events["day_start"], events["day_end"]})
+        self.assertEqual(
+            same_day,
+            self.legacy_ids(created_at__date__gte=date(2026, 3, 10), created_at__date__lte=date(2026, 3, 10)),
+        )
+        self.assertEqual(
+            self.filtered_ids(date_from="2026-03-09", date_to="2026-03-11"), set(events.values()),
+        )
+        self.assertEqual(self.filtered_ids(date_from="2026-03-11", date_to="2026-03-10"), set())
+
+    def test_invalid_date_filter_is_rejected(self):
+        self.authenticate(self.admin)
+        response = self.client.get("/api/v1/audit-logs/", {"date_from": "not-a-date"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("date_from", response.data["errors"])
+
     def test_list_and_retrieve_require_direct_view_permission(self):
         self.admin.user_permissions.remove(self.permission())
         self.authenticate(self.admin)

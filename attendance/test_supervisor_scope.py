@@ -2,7 +2,9 @@ from datetime import date
 from unittest.mock import patch
 
 from django.contrib.auth.models import Permission
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from accounts.models import User
@@ -16,6 +18,9 @@ from academics.models import (
 from students.models import Enrollment, Student
 
 from .models import AttendanceRecord, AttendanceSheet
+
+
+SCOPE_TABLE = 'FROM "academics_supervisor_scope"'
 
 
 class AttendanceSupervisorScopeApiTests(TestCase):
@@ -217,6 +222,85 @@ class AttendanceSupervisorScopeApiTests(TestCase):
         self.assertFalse(
             AttendanceSheet.objects.filter(section=self.primary_create_section).exists()
         )
+
+    def create_sheet_as_primary_supervisor(self, enrollment_count, extra_enrollment=None, user=None):
+        section = self.make_section(
+            self.primary, f"Perf {enrollment_count} #{Section.objects.count()}"
+        )
+        enrollments = [
+            self.make_enrollment(section, f"Perf{enrollment_count}x{index}")
+            for index in range(enrollment_count)
+        ]
+        if extra_enrollment is not None:
+            enrollments.append(extra_enrollment)
+        payload = {
+            "section": str(section.id),
+            "records": [
+                {"enrollment": str(enrollment.id), "status": "present"}
+                for enrollment in enrollments
+            ],
+        }
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client_for(user or self.primary_supervisor).post(
+                "/api/v1/attendance/sheets/", payload, format="json"
+            )
+        return section, response, ctx.captured_queries
+
+    @patch("attendance.services.timezone.localdate", return_value=date(2026, 9, 20))
+    def test_create_response_does_not_lazy_load_each_record(self, _localdate):
+        for user in (self.admin, self.primary_supervisor):
+            with self.subTest(user=user.username):
+                _, small_response, small = self.create_sheet_as_primary_supervisor(2, user=user)
+                _, large_response, large = self.create_sheet_as_primary_supervisor(6, user=user)
+                self.assertEqual(small_response.status_code, 201, small_response.data)
+                self.assertEqual(large_response.status_code, 201, large_response.data)
+
+                # Student names come from one prefetch, never a per-record load.
+                student_loads = 'FROM "students_student"'
+                self.assertEqual(
+                    sum(student_loads in query["sql"] for query in large),
+                    sum(student_loads in query["sql"] for query in small),
+                )
+                # The only per-record growth left is DRF's enrollment PK validation.
+                self.assertLessEqual(len(large) - len(small), 6 - 2)
+
+                data = large_response.data["data"]
+                records = data["records"]
+                self.assertEqual(len(records), 6)
+                self.assertEqual(
+                    [record["student_display"] for record in records],
+                    sorted(record["student_display"] for record in records),
+                )
+                self.assertEqual(data["attendance_date"], "2026-09-20")
+                self.assertEqual(data["created_by"], user.pk)
+                self.assertEqual(data["grade_level_display"], self.primary.name)
+
+    @patch("attendance.services.timezone.localdate", return_value=date(2026, 9, 20))
+    def test_create_scope_checks_do_not_grow_with_records(self, _localdate):
+        _, small_response, small = self.create_sheet_as_primary_supervisor(2)
+        _, large_response, large = self.create_sheet_as_primary_supervisor(6)
+        self.assertEqual(small_response.status_code, 201, small_response.data)
+        self.assertEqual(large_response.status_code, 201, large_response.data)
+
+        def count(queries, marker):
+            return sum(marker in query["sql"] for query in queries)
+
+        # One scope load per request, and no per-record section/grade lazy loads.
+        self.assertEqual(count(small, SCOPE_TABLE), 1)
+        self.assertEqual(count(large, SCOPE_TABLE), 1)
+        for marker in ('FROM "academics_section"', 'FROM "academics_grade_level"'):
+            with self.subTest(marker=marker):
+                self.assertEqual(count(large, marker), count(small, marker))
+
+    @patch("attendance.services.timezone.localdate", return_value=date(2026, 9, 20))
+    def test_create_still_rejects_one_out_of_scope_record_among_many(self, _localdate):
+        section, response, _ = self.create_sheet_as_primary_supervisor(
+            4, extra_enrollment=self.secondary_enrollment
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "SUPERVISOR_ACADEMIC_SCOPE_DENIED")
+        self.assertEqual(response.data["message"], "الشعبة المحددة خارج نطاق مراحل الموجّه.")
+        self.assertFalse(AttendanceSheet.objects.filter(section=section).exists())
 
     def test_roster_is_scoped_without_leaking_students(self):
         client = self.client_for(self.primary_supervisor)

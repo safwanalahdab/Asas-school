@@ -18,7 +18,8 @@ from teaching.models import TeacherAssignment
 from .models import Assessment, AssessmentSection, ScoreAuditLog, StudentScore
 from .selectors import get_enrollment_section_id_on_date
 from .supervisor_scope import (
-    require_assessment, require_enrollments, require_grade_level, require_section,
+    require_assessment, require_assessments, require_enrollments, require_grade_level,
+    require_section,
 )
 
 User = get_user_model()
@@ -119,17 +120,19 @@ def create_assessment(*, section, grade_subject, term, title, max_score, assessm
 
 @transaction.atomic
 def create_assessments_for_grade(*, grade_subject, term, title, max_score, assessment_date, actor, allow_duplicate=False):
-    require_grade_level(actor, grade_subject.grade_level)
+    # Load the supervisor scope once instead of once per section.
+    scope = supervisor_academic_scope_for(actor)
+    require_grade_level(actor, grade_subject.grade_level, scope=scope)
     if term.academic_year_id != grade_subject.academic_year_id:
         raise ValidationError({"term": "الفصل الدراسي لا يتبع سنة مادة الصف المحددة."})
     _validate_definition(title=title, max_score=max_score, term=term, assessment_date=assessment_date)
     sections = list(Section.objects.filter(
         academic_year=grade_subject.academic_year, grade_level=grade_subject.grade_level, is_active=True
-    ).order_by("name"))
+    ).select_related("grade_level").order_by("name"))
     if not sections:
         raise ValidationError({"detail": "لا توجد شعب فعالة لهذا الصف."})
     for section in sections:
-        require_section(actor, section)
+        require_section(actor, section, scope=scope)
     _ensure_not_duplicate(sections=sections, grade_subject=grade_subject, term=term, title=title, assessment_date=assessment_date, allow_duplicate=allow_duplicate)
     assessment = Assessment.objects.create(
         grade_subject=grade_subject, term=term, title=title.strip(), max_score=max_score,
@@ -398,6 +401,12 @@ def _ensure_can_publish(actor):
     return
 
 
+def _assessments_for_scope_check(assessment_ids):
+    # A plain read (no row locks); require_assessments only evaluates it for
+    # applicable supervisor scopes.
+    return Assessment.objects.filter(pk__in=assessment_ids).select_related("grade_subject__grade_level")
+
+
 def _notify_published_assessment_sections(links):
     links_by_scope = {
         (link.assessment_id, link.section_id): link
@@ -452,17 +461,20 @@ def _notify_published_assessment_sections(links):
 
 
 @transaction.atomic
-def publish_section_assessments(*, section, term, actor):
-    require_section(actor, section)
+def publish_section_assessments(*, section, term, actor, scope=None):
+    # Callers that already checked the request may pass their loaded scope.
+    if scope is None:
+        scope = supervisor_academic_scope_for(actor)
+    require_section(actor, section, scope=scope)
     _ensure_can_publish(actor)
     if section.academic_year_id != term.academic_year_id:
         raise ValidationError({"term": "الفصل الدراسي لا يتبع سنة الشعبة."})
-    for link in AssessmentSection.objects.filter(section=section, assessment__term=term, status=AssessmentSection.Status.DRAFT).select_related("assessment"):
-        require_assessment(actor, link.assessment)
+    draft_links = AssessmentSection.objects.filter(section=section, assessment__term=term, status=AssessmentSection.Status.DRAFT)
+    require_assessments(actor, _assessments_for_scope_check(draft_links.values("assessment_id")), scope=scope)
     now, today = timezone.now(), timezone.localdate()
     links = list(AssessmentSection.objects.select_for_update().filter(section=section, assessment__term=term, assessment__assessment_date__lte=today, status=AssessmentSection.Status.DRAFT))
-    for link in links:
-        require_assessment(actor, link.assessment)
+    # Re-check after locking, without widening the lock to related tables.
+    require_assessments(actor, _assessments_for_scope_check({link.assessment_id for link in links}), scope=scope)
     count = AssessmentSection.objects.filter(pk__in=[link.pk for link in links]).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     future = AssessmentSection.objects.filter(section=section, assessment__term=term, assessment__assessment_date__gt=today, status=AssessmentSection.Status.DRAFT).count()
     if count:
@@ -477,17 +489,20 @@ def publish_section_assessments(*, section, term, actor):
 
 
 @transaction.atomic
-def publish_grade_assessments(*, grade_level, term, actor):
-    require_grade_level(actor, grade_level)
+def publish_grade_assessments(*, grade_level, term, actor, scope=None):
+    # Callers that already checked the request may pass their loaded scope.
+    if scope is None:
+        scope = supervisor_academic_scope_for(actor)
+    require_grade_level(actor, grade_level, scope=scope)
     _ensure_can_publish(actor)
-    for link in AssessmentSection.objects.filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT).select_related("assessment"):
-        require_assessment(actor, link.assessment)
+    draft_links = AssessmentSection.objects.filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT)
+    require_assessments(actor, _assessments_for_scope_check(draft_links.values("assessment_id")), scope=scope)
     now, today = timezone.now(), timezone.localdate()
     base = AssessmentSection.objects.select_for_update().filter(section__academic_year=term.academic_year, section__grade_level=grade_level, assessment__term=term, status=AssessmentSection.Status.DRAFT)
     future = base.filter(assessment__assessment_date__gt=today).count()
     links = list(base.filter(assessment__assessment_date__lte=today))
-    for link in links:
-        require_assessment(actor, link.assessment)
+    # Re-check after locking, without widening the lock to related tables.
+    require_assessments(actor, _assessments_for_scope_check({link.assessment_id for link in links}), scope=scope)
     count = AssessmentSection.objects.filter(pk__in=[link.pk for link in links]).update(status=AssessmentSection.Status.PUBLISHED, published_by=actor, published_at=now, updated_at=now)
     if count:
         record_audit_event(

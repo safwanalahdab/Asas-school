@@ -7,7 +7,10 @@ from .models import AttendanceRecord, AttendanceSheet
 
 
 class AttendanceRecordInputSerializer(serializers.Serializer):
-    enrollment = serializers.PrimaryKeyRelatedField(queryset=Enrollment.objects.all())
+    # The section and grade level feed the supervisor stage check in memory.
+    enrollment = serializers.PrimaryKeyRelatedField(
+        queryset=Enrollment.objects.select_related("section__grade_level"),
+    )
     status = serializers.ChoiceField(choices=AttendanceRecord.Status.choices)
     arrival_time = serializers.TimeField(required=False, allow_null=True)
     arrival_method = serializers.ChoiceField(choices=Enrollment.TransportationMethod.choices, required=False, allow_blank=True)

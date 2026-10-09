@@ -88,22 +88,30 @@ def get_student_term_results(*, enrollment, term, published_only=False, scope_us
         | Q(scores__enrollment=enrollment)
     )
     if scope_user is not None:
-        from academics.supervisor_academic_scope import filter_queryset_by_stage
-        from .supervisor_scope import require_assessment
+        from academics.supervisor_academic_scope import (
+            filter_queryset_by_stage,
+            supervisor_academic_scope_for,
+        )
+        from .supervisor_scope import require_assessments
 
+        # Load the scope once for both the stage filter and the batched check.
+        scope = supervisor_academic_scope_for(scope_user)
         assessments = filter_queryset_by_stage(
-            assessments, scope_user, stage_lookup="grade_subject__grade_level__stage"
+            assessments, scope_user, stage_lookup="grade_subject__grade_level__stage",
+            scope=scope,
         )
     if published_only:
         assessments = assessments.filter(assessment_sections__status=AssessmentSection.Status.PUBLISHED)
-    assessments = assessments.select_related("grade_subject__subject").prefetch_related(
+    assessments = list(assessments.select_related(
+        "grade_subject__subject", "grade_subject__grade_level",
+    ).prefetch_related(
         Prefetch("scores", queryset=own_scores, to_attr="selected_student_scores"),
         "assessment_sections",
-    ).distinct().order_by("grade_subject__subject__name", "assessment_date", "created_at")
+    ).distinct().order_by("grade_subject__subject__name", "assessment_date", "created_at"))
+    if scope_user is not None:
+        require_assessments(scope_user, assessments, scope=scope)
     grouped = {}
     for assessment in assessments:
-        if scope_user is not None:
-            require_assessment(scope_user, assessment)
         subject = assessment.grade_subject
         group = grouped.setdefault(subject.id, {
             "grade_subject": subject.id, "subject": subject.subject_id,

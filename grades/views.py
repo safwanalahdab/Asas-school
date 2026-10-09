@@ -487,6 +487,10 @@ class AssessmentViewSet(
             )
         )
 
+        # Reload once with the class queryset's relations and section-link
+        # prefetches so the response does not lazy-load each link's section.
+        assessment = self.queryset.get(pk=assessment.pk)
+
         response_serializer = (
             AssessmentSerializer(
                 assessment,
@@ -651,11 +655,13 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
-        require_section(request.user, serializer.validated_data["section"])
+        # One scope load per request, shared with the service's checks.
+        require_section(request.user, serializer.validated_data["section"], scope=self.supervisor_scope)
 
         result = (
             publish_section_assessments(
                 actor=request.user,
+                scope=self.supervisor_scope,
                 **serializer.validated_data,
             )
         )
@@ -696,11 +702,13 @@ class AssessmentViewSet(
             raise_exception=True,
         )
 
-        require_grade_level(request.user, serializer.validated_data["grade_level"])
+        # One scope load per request, shared with the service's checks.
+        require_grade_level(request.user, serializer.validated_data["grade_level"], scope=self.supervisor_scope)
 
         result = (
             publish_grade_assessments(
                 actor=request.user,
+                scope=self.supervisor_scope,
                 **serializer.validated_data,
             )
         )

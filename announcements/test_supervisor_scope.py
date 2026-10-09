@@ -1,7 +1,9 @@
 from datetime import timedelta
 
 from django.contrib.auth.models import Permission
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -9,6 +11,10 @@ from accounts.models import User
 from academics.models import AcademicYear, GradeLevel, Section, SupervisorScope, SupervisorScopeStage
 from notifications.models import Notification
 from .models import Announcement
+
+
+SCOPE_TABLE = 'FROM "academics_supervisor_scope"'
+GRADE_LEVEL_TABLE = 'FROM "academics_grade_level"'
 
 
 class AnnouncementSupervisorScopeTests(TestCase):
@@ -186,6 +192,97 @@ class AnnouncementSupervisorScopeTests(TestCase):
         self.assertEqual(self.client.delete(self.detail(self.global_note)).status_code, 200)
         self.assertEqual(self.client.delete(self.detail(self.primary_section_note)).status_code, 200)
         self.assertFalse(Announcement.objects.filter(pk=self.global_note.pk).exists())
+
+    def primary_sections(self, count):
+        grade = self.grades["primary"]
+        start = Section.objects.filter(grade_level=grade).count()
+        return [
+            Section.objects.create(academic_year=self.year, grade_level=grade, name=f"Perf {index}")
+            for index in range(start, start + count)
+        ]
+
+    def capture(self, method, url, data):
+        with CaptureQueriesContext(connection) as ctx:
+            response = getattr(self.client, method)(url, data, format="json")
+        return response, ctx.captured_queries
+
+    @staticmethod
+    def count(queries, marker):
+        return sum(marker in query["sql"] for query in queries)
+
+    def assert_sections_display(self, response, sections):
+        self.assertEqual(
+            sorted(response.data["data"]["sections_display"], key=lambda item: item["id"]),
+            sorted(
+                [
+                    {
+                        "id": str(section.pk), "name": section.name,
+                        "grade_level": {
+                            "id": str(section.grade_level_id), "name": section.grade_level.name,
+                        },
+                    }
+                    for section in sections
+                ],
+                key=lambda item: item["id"],
+            ),
+        )
+
+    def test_section_target_checks_do_not_grow_with_sections(self):
+        self.scope("primary")
+        small_sections, large_sections = self.primary_sections(2), self.primary_sections(8)
+        small_response, small = self.capture("post", self.url, self.payload(
+            "sections", sections=small_sections, title="Small",
+        ))
+        large_response, large = self.capture("post", self.url, self.payload(
+            "sections", sections=large_sections, title="Large",
+        ))
+        self.assertEqual(small_response.status_code, 201, small_response.data)
+        self.assertEqual(large_response.status_code, 201, large_response.data)
+        self.assertEqual(self.count(small, SCOPE_TABLE), 1)
+        self.assertEqual(self.count(large, SCOPE_TABLE), 1)
+        self.assertEqual(
+            self.count(large, GRADE_LEVEL_TABLE), self.count(small, GRADE_LEVEL_TABLE),
+        )
+        # Only DRF's primary-key validation may grow, one lookup per section.
+        self.assertLessEqual(len(large) - len(small), len(large_sections) - len(small_sections))
+        self.assert_sections_display(large_response, large_sections)
+
+    def test_mixed_targets_are_still_denied_with_the_batched_check(self):
+        self.scope("primary")
+        sections = [*self.primary_sections(5), self.sections["preparatory"]]
+        response, _ = self.capture("post", self.url, self.payload("sections", sections=sections))
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "SUPERVISOR_ACADEMIC_SCOPE_DENIED")
+        self.assertFalse(Announcement.objects.filter(title="Created").exists())
+
+    def test_sections_display_queries_do_not_grow_after_create_or_update(self):
+        self.grant(self.admin, "add_announcement", "change_announcement", "view_announcement")
+        self.client.force_authenticate(self.admin, token={"client": "web"})
+        small_sections, large_sections = self.primary_sections(2), self.primary_sections(8)
+
+        small_response, small = self.capture("post", self.url, self.payload(
+            "sections", sections=small_sections, title="Admin small",
+        ))
+        large_response, large = self.capture("post", self.url, self.payload(
+            "sections", sections=large_sections, title="Admin large",
+        ))
+        self.assertEqual(small_response.status_code, 201, small_response.data)
+        self.assertEqual(large_response.status_code, 201, large_response.data)
+        self.assertEqual(self.count(large, GRADE_LEVEL_TABLE), self.count(small, GRADE_LEVEL_TABLE))
+        self.assert_sections_display(large_response, large_sections)
+
+        note = Announcement.objects.get(title="Admin small")
+        small_update, small = self.capture("patch", self.detail(note), {
+            "sections": [str(section.pk) for section in small_sections],
+        })
+        large_update, large = self.capture("patch", self.detail(note), {
+            "sections": [str(section.pk) for section in large_sections],
+        })
+        self.assertEqual(small_update.status_code, 200, small_update.data)
+        self.assertEqual(large_update.status_code, 200, large_update.data)
+        self.assertEqual(self.count(large, GRADE_LEVEL_TABLE), self.count(small, GRADE_LEVEL_TABLE))
+        self.assert_sections_display(large_update, large_sections)
+        self.assertEqual(large_update.data["data"]["title"], "Admin small")
 
     def test_missing_scope_and_business_permissions_cover_global(self):
         self.assertEqual(self.client.post(self.url, self.payload(), format="json").status_code, 403)
