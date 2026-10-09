@@ -341,6 +341,31 @@ ALLOWED_HOSTS = read_production_hosts("ALLOWED_HOSTS")
 
 
 # =========================================================
+# Shared cache and client IP handling
+# =========================================================
+
+REDIS_URL = require_setting("REDIS_URL")
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "TIMEOUT": 300,
+        "KEY_PREFIX": "asas",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    },
+}
+
+# Keep every inherited DRF setting and trust exactly the single Nginx proxy.
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,  # noqa: F405
+    "NUM_PROXIES": 1,
+}
+
+
+# =========================================================
 # Frontend, CORS and CSRF origins
 # =========================================================
 

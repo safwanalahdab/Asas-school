@@ -2,6 +2,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
@@ -268,6 +269,10 @@ class MobileAuthTests(TestCase):
     def test_throttle_scopes_are_independent(self):
         self.assertEqual(MobileLoginRateThrottle.scope, "mobile_login")
         self.assertEqual(WebLoginRateThrottle.scope, "web_login")
+
+    def test_login_throttles_use_django_default_cache(self):
+        self.assertIs(MobileLoginRateThrottle.cache, cache)
+        self.assertIs(WebLoginRateThrottle.cache, cache)
 
     def test_mobile_login_is_throttled(self):
         for expected in (401, 401, 401, 401, 401, 429):

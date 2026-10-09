@@ -43,6 +43,7 @@ MANAGED_ENVIRONMENT_VARIABLES = {
     "CSRF_COOKIE_SAMESITE",
     "MEDIA_ROOT",
     "MEDIA_URL",
+    "REDIS_URL",
 }
 
 # قيم اختبارية وهمية فقط.
@@ -63,6 +64,7 @@ VALID_PRODUCTION_ENVIRONMENT = {
     "DB_PORT": "5432",
     "DB_SSLMODE": "disable",
     "MEDIA_ROOT": "/srv/test-media",
+    "REDIS_URL": "redis://127.0.0.1:6379/1",
 }
 
 DEVELOPMENT_ENVIRONMENT = {
@@ -112,6 +114,8 @@ INSPECTED_SETTINGS = [
     "MEDIA_ROOT",
     "FIREBASE_PUSH_ENABLED",
     "FIREBASE_PROJECT_ID",
+    "CACHES",
+    "REST_FRAMEWORK",
 ]
 
 # يعطّل قراءة ملف .env المحلي ثم يستورد وحدة الإعدادات ويطبع ملخصًا JSON
@@ -323,6 +327,54 @@ class ProductionSettingsValidConfigurationTests(
     def test_firebase_disabled_by_default(self):
         self.assertIs(self.settings["FIREBASE_PUSH_ENABLED"], False)
 
+    def test_default_cache_uses_production_redis(self):
+        caches = self.settings["CACHES"]
+
+        self.assertEqual(set(caches), {"default"})
+        self.assertEqual(
+            caches["default"],
+            {
+                "BACKEND": "django_redis.cache.RedisCache",
+                "LOCATION": "redis://127.0.0.1:6379/1",
+                "TIMEOUT": 300,
+                "KEY_PREFIX": "asas",
+                "OPTIONS": {
+                    "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                },
+            },
+        )
+
+    def test_rest_framework_keeps_inherited_settings_and_sets_one_proxy(self):
+        rest_framework = self.settings["REST_FRAMEWORK"]
+
+        self.assertEqual(rest_framework["NUM_PROXIES"], 1)
+        self.assertEqual(
+            rest_framework["DEFAULT_AUTHENTICATION_CLASSES"],
+            ["accounts.authentication.CookieJWTAuthentication"],
+        )
+        self.assertEqual(
+            rest_framework["DEFAULT_PERMISSION_CLASSES"],
+            [
+                "rest_framework.permissions.IsAuthenticated",
+                "accounts.permissions.PasswordChangeGate",
+            ],
+        )
+        self.assertEqual(
+            rest_framework["DEFAULT_PAGINATION_CLASS"],
+            "config.pagination.StandardPageNumberPagination",
+        )
+        self.assertEqual(
+            rest_framework["DEFAULT_THROTTLE_RATES"],
+            {
+                "web_login": "5/minute",
+                "mobile_login": "5/minute",
+                "mobile_school_request_burst": "3/minute",
+                "mobile_school_request_hourly": "5/hour",
+                "mobile_device_registration": "10/minute",
+                "mobile_device_unregistration": "10/minute",
+            },
+        )
+
 
 class ProductionSettingsValidationTests(
     ProductionSettingsTestMixin,
@@ -438,6 +490,7 @@ class ProductionSettingsValidationTests(
             "DB_PORT",
             "DB_SSLMODE",
             "MEDIA_ROOT",
+            "REDIS_URL",
         ):
             for value in (None, ""):
                 with self.subTest(name=name, value=value):
@@ -578,6 +631,13 @@ class ProductionSettingsValidationTests(
         for secret in (TEST_SECRET_KEY, TEST_JWT_SIGNING_KEY, TEST_DB_PASSWORD):
             self.assertNotIn(secret, result["raw_output"])
 
+        result = self.assert_rejected("REDIS_URL", REDIS_URL="")
+        self.assertEqual(
+            result["error"],
+            "REDIS_URL is required in production.",
+        )
+        self.assertNotIn("redis://", result["raw_output"])
+
 
 class BaseSettingsUnchangedTests(SimpleTestCase):
     def test_development_settings_keep_existing_behavior(self):
@@ -598,6 +658,8 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
         self.assertEqual(settings["JWT_COOKIE_SAMESITE"], "Lax")
         self.assertNotIn("STORAGES", settings)
         self.assertNotIn("MEDIA_ROOT", settings)
+        self.assertNotIn("CACHES", settings)
+        self.assertNotIn("NUM_PROXIES", settings["REST_FRAMEWORK"])
         self.assertEqual(result["database"]["OPTIONS"], {"sslmode": "disable"})
 
     def test_test_settings_keep_existing_behavior(self):
@@ -615,4 +677,9 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
         self.assertEqual(
             result["settings"]["CORS_ALLOWED_ORIGIN_REGEXES"],
             [r"^https://[A-Za-z0-9-]+\.vercel\.app$"],
+        )
+        self.assertNotIn("CACHES", result["settings"])
+        self.assertNotIn(
+            "NUM_PROXIES",
+            result["settings"]["REST_FRAMEWORK"],
         )
