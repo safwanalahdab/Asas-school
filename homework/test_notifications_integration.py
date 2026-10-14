@@ -105,11 +105,9 @@ class HomeworkNotificationTests(TestCase):
         )
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch(
-        "notifications.push_services.send_notification_push",
-        side_effect=RuntimeError("Firebase unavailable"),
-    )
-    def test_api_create_triggers_once_and_patch_does_not_notify_again(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_api_create_triggers_once_and_patch_does_not_notify_again(self, send, send_each):
         self.client.force_authenticate(self.admin, token={"client": "web"})
         with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
@@ -129,3 +127,9 @@ class HomeworkNotificationTests(TestCase):
         )
         self.assertEqual(patch_response.status_code, 200)
         self.assertEqual(Notification.objects.count(), 1)
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()

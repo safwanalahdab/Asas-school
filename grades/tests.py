@@ -272,8 +272,9 @@ class GradesRefactorTests(TestCase):
         self.assertFalse(Notification.objects.exists())
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.send_notification_push", side_effect=RuntimeError("firebase down"))
-    def test_firebase_failure_does_not_break_publish(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_firebase_failure_does_not_break_publish(self, send, send_each):
         guardian = User.objects.create_user(
             username="grades-push-guardian", password="x",
             role=User.Role.GUARDIAN, must_change_password=False,
@@ -291,6 +292,12 @@ class GradesRefactorTests(TestCase):
             )
         self.assertEqual(result["published_count"], 1)
         self.assertEqual(Notification.objects.count(), 1)
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()
 
     def test_published_definition_and_deletion_rules(self):
         assessment = self.assessment()

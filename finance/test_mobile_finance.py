@@ -160,8 +160,9 @@ class MobileFinanceTests(TestCase):
         self.assertFalse(Notification.objects.exists())
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.send_notification_push", side_effect=RuntimeError("firebase down"))
-    def test_firebase_failure_does_not_break_payment(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_firebase_failure_does_not_break_payment(self, send, send_each):
         account = self.make_account()
         with self.captureOnCommitCallbacks(execute=True):
             payment = record_payment(
@@ -170,6 +171,12 @@ class MobileFinanceTests(TestCase):
             )
         self.assertIsNotNone(payment.pk)
         self.assertEqual(Notification.objects.count(), 1)
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()
 
     def test_configured_account_uses_services_and_historical_values(self):
         account = self.make_account()

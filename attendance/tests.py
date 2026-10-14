@@ -137,8 +137,9 @@ class AttendanceNotificationTests(AttendanceFixture):
         self.assertFalse(Notification.objects.exists())
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.send_notification_push", side_effect=RuntimeError("firebase down"))
-    def test_firebase_failure_does_not_break_absence_update(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_firebase_failure_does_not_break_absence_update(self, send, send_each):
         _sheet, record = self.sheet_with_record()
         with self.captureOnCommitCallbacks(execute=True):
             updated = update_attendance_record(
@@ -149,6 +150,12 @@ class AttendanceNotificationTests(AttendanceFixture):
         self.assertEqual(updated.status, AttendanceRecord.Status.ABSENT)
         self.assertEqual(Notification.objects.count(), 1)
 
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()
 
 class PermissionMatrixTests(AttendanceFixture):
     def assert_read_access(self, user, expected):

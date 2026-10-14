@@ -84,11 +84,9 @@ class BehaviorNotificationTests(TestCase):
         self.assertEqual(Notification.objects.count(), 0)
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch(
-        "notifications.push_services.send_notification_push",
-        side_effect=RuntimeError("Firebase unavailable"),
-    )
-    def test_patch_does_not_create_second_notification(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_patch_does_not_create_second_notification(self, send, send_each):
         with self.captureOnCommitCallbacks(execute=True):
             response = self.create_note("positive")
         note_id = response.data["data"]["id"]
@@ -99,3 +97,9 @@ class BehaviorNotificationTests(TestCase):
         )
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(Notification.objects.count(), 1)
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()

@@ -201,16 +201,20 @@ class StudentPointNotificationTests(TestCase):
         self.assertEqual(Notification.objects.count(), 1)
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch(
-        "notifications.push_services.send_notification_push",
-        side_effect=RuntimeError("Firebase unavailable"),
-    )
-    def test_push_failure_does_not_block_point_creation(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_push_failure_does_not_block_point_creation(self, send, send_each):
         with self.captureOnCommitCallbacks(execute=True):
             response = self.create_point()
         self.assertEqual(response.status_code, 201)
         self.assertEqual(StudentPointEntry.objects.count(), 1)
         self.assertEqual(Notification.objects.count(), 1)
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()
 
     def test_single_post_creates_one_notification_and_keeps_response_contract(self):
         response = self.create_point()

@@ -205,30 +205,29 @@ class AppointmentNotificationIntegrationTests(TestCase):
         self.assertEqual(Notification.objects.count(), 0)
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.safe_send_notification_push")
-    def test_approve_and_reject_schedule_push_only_after_commit(self, safe_send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_approve_and_reject_queue_pending_push_without_sending(self, send, send_each):
         approved = self.appointment()
         rejected = self.appointment()
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True):
             approve_appointment_request(appointment=approved, actor=self.admin)
             reject_appointment_request(
                 appointment=rejected,
                 actor=self.admin,
                 decision_reason="Private decision reason",
             )
-            safe_send.assert_not_called()
 
-        self.assertEqual(len(callbacks), 2)
-        self.assertEqual(safe_send.call_count, 2)
-        notification_ids = set(
-            Notification.objects.filter(
-                resource_id__in=[approved.id, rejected.id]
-            ).values_list("id", flat=True)
-        )
         self.assertEqual(
-            {call.args[0] for call in safe_send.call_args_list},
-            notification_ids,
+            sorted(
+                Notification.objects.filter(
+                    resource_id__in=[approved.id, rejected.id]
+                ).values_list("push_status", flat=True)
+            ),
+            [Notification.PushStatus.PENDING] * 2,
         )
+        send.assert_not_called()
+        send_each.assert_not_called()
         rejected_notification = Notification.objects.get(resource_id=rejected.id)
         message = build_notification_message(
             notification=rejected_notification,
@@ -238,15 +237,21 @@ class AppointmentNotificationIntegrationTests(TestCase):
         self.assertNotIn("Private decision reason", message.notification.body)
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.safe_send_notification_push")
-    def test_invalid_final_state_does_not_schedule_new_push(self, safe_send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_invalid_final_state_does_not_queue_new_push(self, send, send_each):
         appointment = self.appointment()
         with self.captureOnCommitCallbacks(execute=True):
             approve_appointment_request(appointment=appointment, actor=self.admin)
-        safe_send.reset_mock()
+        notification = Notification.objects.get(resource_id=appointment.id)
+        self.assertEqual(notification.push_status, Notification.PushStatus.PENDING)
 
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+        with self.captureOnCommitCallbacks(execute=True):
             with self.assertRaises(ValidationError):
                 approve_appointment_request(appointment=appointment, actor=self.admin)
-        self.assertEqual(callbacks, [])
-        safe_send.assert_not_called()
+        self.assertEqual(
+            list(Notification.objects.filter(resource_id=appointment.id).values_list("pk", flat=True)),
+            [notification.pk],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()

@@ -9,7 +9,6 @@ from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from firebase_admin import messaging
 
 from academics.models import AcademicYear, GradeLevel, GradeSubject, Section, Subject, Term
 from announcements.models import Announcement
@@ -24,17 +23,12 @@ from students.models import Enrollment, GuardianStudent, Student
 from teaching.models import TeacherAssignment
 
 from .models import Notification, PushDevice
-from .push_services import PushDeliveryResult, safe_send_notifications_push, send_notification_push
 from .services import create_notification, create_notifications
 
 
 User = get_user_model()
 
 PUSH_ON = override_settings(FIREBASE_PUSH_ENABLED=True)
-
-
-def selects(queries):
-    return [q for q in queries if q["sql"].lstrip().upper().startswith("SELECT")]
 
 
 class FanoutFixture(TestCase):
@@ -91,6 +85,7 @@ class FanoutFixture(TestCase):
         )
 
 
+@PUSH_ON
 class CreateNotificationsTests(FanoutFixture):
     def specs_for(self, count, section_name):
         section = self.section(section_name)
@@ -114,17 +109,19 @@ class CreateNotificationsTests(FanoutFixture):
         existing, _ = create_notification(**self.spec(guardian, student, event_key="fanout:existing"))
         repeated = self.spec(guardian, student, event_key="fanout:repeated")
 
-        with self.captureOnCommitCallbacks(execute=False) as callbacks:
-            results = create_notifications([
-                repeated, dict(repeated), self.spec(guardian, student, event_key="fanout:existing"),
-            ])
+        results = create_notifications([
+            repeated, dict(repeated), self.spec(guardian, student, event_key="fanout:existing"),
+        ])
 
         (first, first_created), (second, second_created), (third, third_created) = results
         self.assertTrue(first_created)
         self.assertEqual((second.pk, second_created), (first.pk, False))
         self.assertEqual((third.pk, third_created), (existing.pk, False))
         self.assertEqual(Notification.objects.filter(recipient=guardian).count(), 2)
-        self.assertEqual(len(callbacks), 1)
+        self.assertEqual(
+            set(Notification.objects.filter(recipient=guardian).values_list("push_status", flat=True)),
+            {Notification.PushStatus.PENDING},
+        )
 
     def test_content_matches_single_create_notification(self):
         guardian, student, _ = self.family(self.section("C"))
@@ -136,7 +133,7 @@ class CreateNotificationsTests(FanoutFixture):
 
         fields = (
             "recipient_id", "notification_type", "title", "body", "student_id",
-            "resource_type", "resource_id", "is_read", "read_at",
+            "resource_type", "resource_id", "is_read", "read_at", "push_status", "push_attempts",
         )
         self.assertEqual(
             {field: getattr(bulk, field) for field in fields},
@@ -171,145 +168,50 @@ class CreateNotificationsTests(FanoutFixture):
                 self.assertEqual(bulk.exception.message_dict, single.exception.message_dict)
         self.assertFalse(Notification.objects.exists())
 
-    def test_push_is_scheduled_once_after_commit_only(self):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_new_notifications_are_pending_and_nothing_runs_after_commit(self, send, send_each):
         specs = self.specs_for(4, "P")
-        with patch("notifications.push_services.safe_send_notifications_push") as send_batch:
-            with self.captureOnCommitCallbacks(execute=True) as callbacks:
-                results = create_notifications(specs)
-                send_batch.assert_not_called()
-        self.assertEqual(len(callbacks), 1)
-        send_batch.assert_called_once_with([notification.id for notification, _ in results])
-
-    def test_rollback_discards_push_callback_and_notifications(self):
-        specs = self.specs_for(3, "R")
-        with patch("notifications.push_services.safe_send_notifications_push") as send_batch:
-            with self.captureOnCommitCallbacks(execute=True) as callbacks:
-                with self.assertRaises(RuntimeError), transaction.atomic():
-                    create_notifications(specs)
-                    raise RuntimeError("rollback")
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            results = create_notifications(specs)
         self.assertEqual(callbacks, [])
-        send_batch.assert_not_called()
+        now = timezone.now()
+        for notification in Notification.objects.filter(pk__in=[n.pk for n, _ in results]):
+            self.assertEqual(notification.push_status, Notification.PushStatus.PENDING)
+            self.assertEqual(notification.push_attempts, 0)
+            self.assertLessEqual(notification.push_next_attempt_at, now)
+        send.assert_not_called()
+        send_each.assert_not_called()
+
+    @override_settings(FIREBASE_PUSH_ENABLED=False)
+    def test_disabled_push_creates_skipped_notifications(self):
+        results = create_notifications(self.specs_for(2, "K"))
+        self.assertEqual(
+            set(Notification.objects.filter(pk__in=[n.pk for n, _ in results]).values_list("push_status", flat=True)),
+            {Notification.PushStatus.SKIPPED},
+        )
+
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_rollback_leaves_no_notifications(self, send, send_each):
+        specs = self.specs_for(3, "R")
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            create_notifications(specs)
+            raise RuntimeError("rollback")
         self.assertFalse(Notification.objects.exists())
+        send.assert_not_called()
+        send_each.assert_not_called()
 
     def test_insert_race_falls_back_to_single_idempotent_path(self):
         specs = self.specs_for(3, "F")
         with patch.object(Notification.objects, "bulk_create", side_effect=IntegrityError("race")):
-            with self.captureOnCommitCallbacks(execute=False) as callbacks:
-                results = create_notifications(specs)
+            results = create_notifications(specs)
         self.assertEqual(Notification.objects.count(), 3)
         self.assertTrue(all(created for _, created in results))
-        self.assertEqual(len(callbacks), 3)
-
-
-@PUSH_ON
-@patch("notifications.push_services.get_firebase_app", return_value=object())
-class BatchPushTests(FanoutFixture):
-    def notifications_for(self, count, *, devices_per_user=1):
-        notifications = []
-        for _ in range(count):
-            guardian = self.guardian()
-            for _ in range(devices_per_user):
-                self.device(guardian)
-            notifications.append(Notification.objects.create(
-                recipient=guardian, notification_type=Notification.NotificationType.GENERAL,
-                title="Title", body="Body",
-            ))
-        return notifications
-
-    @patch("notifications.push_services.messaging.send", return_value="message-id")
-    def test_device_loading_does_not_grow_with_recipients(self, send, _app):
-        small, large = self.notifications_for(3), self.notifications_for(30)
-        with CaptureQueriesContext(connection) as small_queries:
-            safe_send_notifications_push([n.id for n in small])
-        with CaptureQueriesContext(connection) as large_queries:
-            results = safe_send_notifications_push([n.id for n in large])
-
-        self.assertEqual(len(selects(large_queries)), len(selects(small_queries)))
-        self.assertEqual(len(selects(large_queries)), 2)
-        self.assertEqual(results, [PushDeliveryResult(attempted=1, sent=1)] * 30)
-        self.assertEqual(send.call_count, 33)
-
-    @patch("notifications.push_services.messaging.send", return_value="message-id")
-    def test_only_recipients_active_devices_get_one_message_each(self, send, _app):
-        guardian = self.guardian()
-        first, second = self.device(guardian), self.device(guardian)
-        self.device(guardian, active=False)
-        self.device(self.guardian())  # not a recipient
-        notification = Notification.objects.create(
-            recipient=guardian, notification_type=Notification.NotificationType.GENERAL, title="T", body="B",
-        )
-
-        results = safe_send_notifications_push([notification.id])
-
-        self.assertEqual(results, [PushDeliveryResult(attempted=2, sent=2)])
         self.assertEqual(
-            sorted(call.args[0].token for call in send.call_args_list),
-            sorted([first.fcm_token, second.fcm_token]),
+            set(Notification.objects.values_list("push_status", flat=True)),
+            {Notification.PushStatus.PENDING},
         )
-        self.assertEqual(Notification.objects.filter(recipient=guardian).count(), 1)
-
-    @patch("notifications.push_services.messaging.send", return_value="message-id")
-    def test_repeated_token_is_sent_once(self, send, _app):
-        notification, = self.notifications_for(1)
-        device = PushDevice.objects.get(user=notification.recipient)
-        result = send_notification_push(notification, devices=[device, device])
-        self.assertEqual(result, PushDeliveryResult(attempted=1, sent=1))
-        self.assertEqual(send.call_count, 1)
-
-    @patch("notifications.push_services.messaging.send")
-    def test_one_bad_token_does_not_stop_the_batch(self, send, _app):
-        bad, good = self.notifications_for(2)
-        bad_device = PushDevice.objects.get(user=bad.recipient)
-
-        def send_one(message, **_kwargs):
-            if message.token == bad_device.fcm_token:
-                raise messaging.UnregisteredError("unregistered")
-            return "message-id"
-
-        send.side_effect = send_one
-        results = safe_send_notifications_push([bad.id, good.id])
-
-        bad_device.refresh_from_db()
-        self.assertFalse(bad_device.is_active)
-        self.assertEqual(results, [
-            PushDeliveryResult(attempted=1, failed=1, disabled=1),
-            PushDeliveryResult(attempted=1, sent=1),
-        ])
-
-    @patch("notifications.push_services.messaging.send", side_effect=RuntimeError("token-secret-value"))
-    def test_firebase_failure_is_contained_and_logs_no_token(self, _send, _app):
-        notifications = self.notifications_for(2)
-        with self.assertLogs("notifications.push_services", level="ERROR") as logs:
-            results = safe_send_notifications_push([n.id for n in notifications])
-        output = "\n".join(logs.output)
-        self.assertEqual(results, [PushDeliveryResult(attempted=1, failed=1)] * 2)
-        self.assertNotIn("token-secret-value", output)
-        for device in PushDevice.objects.all():
-            self.assertNotIn(device.fcm_token, output)
-            self.assertTrue(device.is_active)
-        self.assertEqual(Notification.objects.count(), 2)
-
-    def test_unexpected_failure_on_one_notification_keeps_processing_others(self, _app):
-        failing, ok = self.notifications_for(2)
-
-        def send_or_fail(notification, **_kwargs):
-            if notification.id == failing.id:
-                raise RuntimeError("boom")
-            return PushDeliveryResult(attempted=1, sent=1)
-
-        with patch("notifications.push_services.send_notification_push", side_effect=send_or_fail), \
-                self.assertLogs("notifications.push_services", level="ERROR") as logs:
-            results = safe_send_notifications_push([failing.id, ok.id])
-
-        self.assertEqual(results, [PushDeliveryResult(failed=1), PushDeliveryResult(attempted=1, sent=1)])
-        self.assertIn(f"Unexpected push failure notification_id={failing.id}", "\n".join(logs.output))
-
-    def test_deleted_notification_is_skipped(self, _app):
-        notification, = self.notifications_for(1)
-        missing = uuid.uuid4()
-        with patch("notifications.push_services.messaging.send", return_value="id"):
-            results = safe_send_notifications_push([missing, notification.id])
-        self.assertEqual(results, [PushDeliveryResult(failed=1), PushDeliveryResult(attempted=1, sent=1)])
 
 
 class FanoutCallerTests(FanoutFixture):
@@ -417,9 +319,9 @@ class FanoutCallerTests(FanoutFixture):
         self.assertEqual(len(run(15, "GL")), len(run(3, "GS")))
 
     @PUSH_ON
-    @patch("notifications.push_services.get_firebase_app", return_value=object())
-    @patch("notifications.push_services.messaging.send", side_effect=RuntimeError("down"))
-    def test_firebase_outage_does_not_undo_the_operation(self, _send, _app):
+    @patch("firebase_admin.messaging.send_each", side_effect=RuntimeError("down"))
+    @patch("firebase_admin.messaging.send", side_effect=RuntimeError("down"))
+    def test_firebase_outage_does_not_undo_the_operation(self, send, send_each):
         section, families = self.families(3, "O")
         for guardian, _, _ in families:
             self.device(guardian)
@@ -428,9 +330,13 @@ class FanoutCallerTests(FanoutFixture):
             publish_date=self.today, created_by=self.admin,
         )
         announcement.sections.add(section)
-        with self.assertLogs("notifications.push_services", level="ERROR"):
-            with self.captureOnCommitCallbacks(execute=True):
-                with transaction.atomic():
-                    notify_announcement_published(announcement)
-        self.assertEqual(Notification.objects.filter(resource_id=announcement.id).count(), 3)
+        with self.captureOnCommitCallbacks(execute=True):
+            with transaction.atomic():
+                notify_announcement_published(announcement)
+        self.assertEqual(
+            list(Notification.objects.filter(resource_id=announcement.id).values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING] * 3,
+        )
         self.assertTrue(Announcement.objects.filter(pk=announcement.pk).exists())
+        send.assert_not_called()
+        send_each.assert_not_called()

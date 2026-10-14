@@ -1,19 +1,13 @@
 import uuid
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.test import TestCase, override_settings
 from django.utils import timezone
-from firebase_admin import messaging
 
-from notifications.models import Notification, PushDevice
-from notifications.push_services import (
-    PushDeliveryResult,
-    build_notification_message,
-    safe_send_notification_push,
-    send_notification_push,
-)
+from notifications.models import Notification
+from notifications.push_services import build_notification_message
 from notifications.services import create_notification
 
 
@@ -58,12 +52,6 @@ class PushServiceTests(TestCase):
             role=User.Role.GUARDIAN,
             must_change_password=False,
         )
-        self.other = User.objects.create_user(
-            username="push-other",
-            password="StrongPass!493",
-            role=User.Role.GUARDIAN,
-            must_change_password=False,
-        )
         self.notification = Notification.objects.create(
             recipient=self.guardian,
             notification_type=Notification.NotificationType.APPOINTMENT,
@@ -71,16 +59,6 @@ class PushServiceTests(TestCase):
             body="Safe body",
             resource_type="appointment",
             resource_id=uuid.uuid4(),
-        )
-
-    def device(self, *, user=None, active=True, token=None):
-        return PushDevice.objects.create(
-            user=user or self.guardian,
-            installation_id=uuid.uuid4(),
-            fcm_token=token or f"token-{uuid.uuid4()}",
-            platform=PushDevice.Platform.ANDROID,
-            is_active=active,
-            last_seen_at=timezone.now(),
         )
 
     def test_payload_is_safe_complete_and_all_data_values_are_strings(self):
@@ -122,95 +100,8 @@ class PushServiceTests(TestCase):
         self.assertEqual(data["resource_type"], "")
         self.assertEqual(data["resource_id"], "")
 
-    @override_settings(FIREBASE_PUSH_ENABLED=False)
-    @patch("notifications.push_services.get_firebase_app")
-    @patch("notifications.push_services.messaging.send")
-    def test_disabled_never_initializes_or_sends(self, send, get_app):
-        self.device()
-        self.assertEqual(send_notification_push(self.notification), PushDeliveryResult())
-        get_app.assert_not_called()
-        send.assert_not_called()
 
-    @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.get_firebase_app", return_value=object())
-    @patch("notifications.push_services.messaging.send", return_value="message-id")
-    def test_only_active_recipient_devices_are_sent(self, send, _get_app):
-        self.device()
-        self.device(active=False)
-        self.device(user=self.other)
-        result = send_notification_push(self.notification)
-        self.assertEqual(result, PushDeliveryResult(attempted=1, sent=1))
-        self.assertEqual(send.call_count, 1)
-
-    @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.get_firebase_app", return_value=object())
-    @patch("notifications.push_services.messaging.send", return_value="message-id")
-    def test_two_active_devices_receive_independent_attempts(self, send, _get_app):
-        self.device()
-        self.device()
-        result = send_notification_push(self.notification)
-        self.assertEqual(result, PushDeliveryResult(attempted=2, sent=2))
-        self.assertEqual(send.call_count, 2)
-
-    @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.get_firebase_app", return_value=object())
-    @patch("notifications.push_services.messaging.send")
-    def test_unregistered_device_is_disabled_and_other_device_continues(
-        self, send, _get_app
-    ):
-        invalid = self.device(token="invalid-token")
-        valid = self.device(token="valid-token")
-        def send_one(message, **_kwargs):
-            if message.token == "invalid-token":
-                raise messaging.UnregisteredError("unregistered")
-            return "message-id"
-
-        send.side_effect = send_one
-        result = send_notification_push(self.notification)
-        invalid.refresh_from_db()
-        valid.refresh_from_db()
-        self.assertEqual(
-            result, PushDeliveryResult(attempted=2, sent=1, failed=1, disabled=1)
-        )
-        self.assertFalse(invalid.is_active)
-        self.assertTrue(valid.is_active)
-        self.assertTrue(Notification.objects.filter(pk=self.notification.pk).exists())
-
-    @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.get_firebase_app", return_value=object())
-    @patch("notifications.push_services.messaging.send", side_effect=RuntimeError("down"))
-    def test_transient_failure_is_contained_without_disabling_device(
-        self, _send, _get_app
-    ):
-        device = self.device()
-        result = safe_send_notification_push(self.notification.id)
-        device.refresh_from_db()
-        self.assertEqual(result, PushDeliveryResult(attempted=1, failed=1))
-        self.assertTrue(device.is_active)
-        self.assertTrue(Notification.objects.filter(pk=self.notification.pk).exists())
-
-    @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.get_firebase_app", side_effect=RuntimeError("config"))
-    def test_initialization_failure_is_contained(self, _get_app):
-        self.device()
-        self.assertEqual(
-            safe_send_notification_push(self.notification.id),
-            PushDeliveryResult(attempted=1, failed=1),
-        )
-
-    @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch("notifications.push_services.messaging.send")
-    def test_no_devices_and_ineligible_recipient_do_not_send(self, send):
-        self.assertEqual(send_notification_push(self.notification), PushDeliveryResult())
-        self.guardian.must_change_password = True
-        self.guardian.save(update_fields=["must_change_password"])
-        self.notification.recipient.must_change_password = True
-        self.device()
-        self.assertEqual(send_notification_push(self.notification), PushDeliveryResult())
-        send.assert_not_called()
-        self.assertTrue(Notification.objects.filter(pk=self.notification.pk).exists())
-
-
+@override_settings(FIREBASE_PUSH_ENABLED=True)
 class PushSchedulingTests(TestCase):
     def setUp(self):
         self.guardian = User.objects.create_user(
@@ -229,27 +120,38 @@ class PushSchedulingTests(TestCase):
             event_key=event_key,
         )
 
-    @patch("notifications.push_services.safe_send_notification_push")
-    def test_new_event_schedules_once_and_duplicate_does_not(self, safe_send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_new_event_is_pending_once_and_never_sends(self, send, send_each):
         with self.captureOnCommitCallbacks(execute=True) as callbacks:
             first, first_created = self.create("push:event:1")
             second, second_created = self.create("push:event:1")
-            safe_send.assert_not_called()
         self.assertTrue(first_created)
         self.assertFalse(second_created)
         self.assertEqual(first.pk, second.pk)
-        self.assertEqual(len(callbacks), 1)
-        safe_send.assert_called_once_with(first.id)
-
-    @patch("notifications.push_services.safe_send_notification_push")
-    def test_rollback_discards_callback(self, safe_send):
-        with self.captureOnCommitCallbacks(execute=True) as callbacks:
-            try:
-                with transaction.atomic():
-                    self.create("push:rollback")
-                    raise RuntimeError("rollback")
-            except RuntimeError:
-                pass
         self.assertEqual(callbacks, [])
-        safe_send.assert_not_called()
+        first.refresh_from_db()
+        self.assertEqual(first.push_status, Notification.PushStatus.PENDING)
+        self.assertEqual(first.push_attempts, 0)
+        self.assertIsNotNone(first.push_next_attempt_at)
+        self.assertLessEqual(first.push_next_attempt_at, timezone.now())
+        self.assertEqual(Notification.objects.filter(event_key="push:event:1").count(), 1)
+        send.assert_not_called()
+        send_each.assert_not_called()
+
+    @override_settings(FIREBASE_PUSH_ENABLED=False)
+    def test_disabled_push_creates_skipped_notification(self):
+        notification, created = self.create("push:disabled")
+        self.assertTrue(created)
+        notification.refresh_from_db()
+        self.assertEqual(notification.push_status, Notification.PushStatus.SKIPPED)
+
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_rollback_leaves_no_row(self, send, send_each):
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            self.create("push:rollback")
+            raise RuntimeError("rollback")
         self.assertFalse(Notification.objects.filter(event_key="push:rollback").exists())
+        send.assert_not_called()
+        send_each.assert_not_called()

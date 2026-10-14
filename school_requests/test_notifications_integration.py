@@ -50,11 +50,9 @@ class SchoolRequestNotificationTests(TestCase):
         )
 
     @override_settings(FIREBASE_PUSH_ENABLED=True)
-    @patch(
-        "notifications.push_services.send_notification_push",
-        side_effect=RuntimeError("Firebase unavailable"),
-    )
-    def test_answer_creates_private_deterministic_notification(self, _send):
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_answer_creates_private_deterministic_notification(self, send, send_each):
         school_request = self.create_request()
         response_text = "Sensitive answer details"
         with self.captureOnCommitCallbacks(execute=True):
@@ -73,6 +71,12 @@ class SchoolRequestNotificationTests(TestCase):
         self.assertEqual(notification.resource_id, school_request.id)
         self.assertEqual(notification.event_key, f"school_request:{school_request.id}:answered")
         self.assertNotIn(response_text, notification.body)
+        self.assertEqual(
+            list(Notification.objects.values_list("push_status", flat=True)),
+            [Notification.PushStatus.PENDING],
+        )
+        send.assert_not_called()
+        send_each.assert_not_called()
 
     def test_answer_locks_only_school_request_row(self):
         school_request = self.create_request()

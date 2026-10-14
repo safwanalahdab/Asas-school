@@ -1,5 +1,6 @@
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -34,6 +35,13 @@ def _normalize_resource_pair(*, resource_type, resource_id):
     return resource_type, resource_id
 
 
+def _initial_push_status():
+    # The row is the push outbox; the worker only picks up pending rows.
+    if settings.FIREBASE_PUSH_ENABLED:
+        return Notification.PushStatus.PENDING
+    return Notification.PushStatus.SKIPPED
+
+
 def create_notification(
     *,
     recipient,
@@ -60,27 +68,20 @@ def create_notification(
         "student": student,
         "resource_type": resource_type,
         "resource_id": resource_id,
+        "push_status": _initial_push_status(),
     }
     candidate = Notification(recipient=recipient, event_key=event_key, **values)
     candidate.full_clean(validate_unique=False, validate_constraints=False)
 
     if event_key is None:
         candidate.save()
-        from .push_services import schedule_notification_push
-
-        schedule_notification_push(candidate.id)
         return candidate, True
 
-    notification, created = Notification.objects.get_or_create(
+    return Notification.objects.get_or_create(
         recipient=recipient,
         event_key=event_key,
         defaults=values,
     )
-    if created:
-        from .push_services import schedule_notification_push
-
-        schedule_notification_push(notification.id)
-    return notification, created
 
 
 def _validate_content(*, notification_type, title, body):
@@ -96,7 +97,7 @@ def create_notifications(specs):
     """Fan-out variant of create_notification for many recipients at once.
 
     Each spec takes create_notification's keyword arguments. Validation,
-    event_key idempotency and push-after-commit match create_notification,
+    event_key idempotency and the initial push state match create_notification,
     but lookups and inserts run in a constant number of queries. Returns
     ``(notification, created)`` pairs in spec order. Any spec failing the
     batched checks is re-validated through the single path so the raised
@@ -127,6 +128,7 @@ def create_notifications(specs):
             ).values_list("guardian_id", "student_id")
         )
 
+    push_status = _initial_push_status()
     candidates = []
     for spec in specs:
         recipient, student = spec.get("recipient"), spec.get("student")
@@ -153,6 +155,7 @@ def create_notifications(specs):
             student=student,
             resource_type=resource_type,
             resource_id=resource_id,
+            push_status=push_status,
         )
         try:
             candidate.clean_fields(exclude=["recipient", "student"])
@@ -192,10 +195,6 @@ def create_notifications(specs):
             # A concurrent writer inserted one of these events; fall back to
             # get_or_create per spec, which resolves races exactly as before.
             return [create_notification(**spec) for spec in specs]
-
-        from .push_services import schedule_notifications_push
-
-        schedule_notifications_push([notification.id for notification in new])
     return results
 
 
