@@ -9,6 +9,7 @@ from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from firebase_admin import messaging
 
 from academics.models import AcademicYear, GradeLevel, GradeSubject, Section, Subject, Term
 from announcements.models import Announcement
@@ -23,12 +24,18 @@ from students.models import Enrollment, GuardianStudent, Student
 from teaching.models import TeacherAssignment
 
 from .models import Notification, PushDevice
+from .push_services import send_claimed_notifications
+from .push_testing import fake_send_each, sent_tokens
 from .services import create_notification, create_notifications
 
 
 User = get_user_model()
 
 PUSH_ON = override_settings(FIREBASE_PUSH_ENABLED=True)
+
+
+def selects(queries):
+    return [q for q in queries if q["sql"].lstrip().upper().startswith("SELECT")]
 
 
 class FanoutFixture(TestCase):
@@ -212,6 +219,105 @@ class CreateNotificationsTests(FanoutFixture):
             set(Notification.objects.values_list("push_status", flat=True)),
             {Notification.PushStatus.PENDING},
         )
+
+
+@PUSH_ON
+@patch("notifications.push_services.get_firebase_app", return_value=object())
+class BatchPushTests(FanoutFixture):
+    def notifications_for(self, count, *, devices_per_user=1):
+        ids = []
+        for _ in range(count):
+            guardian = self.guardian()
+            for _ in range(devices_per_user):
+                self.device(guardian)
+            ids.append(Notification.objects.create(
+                recipient=guardian, notification_type=Notification.NotificationType.GENERAL,
+                title="Title", body="Body",
+            ).id)
+        return self.claimed(ids)
+
+    def claimed(self, ids):
+        # The worker hands over claimed rows with their recipient loaded.
+        by_id = Notification.objects.select_related("recipient").in_bulk(ids)
+        return [by_id[notification_id] for notification_id in ids]
+
+    @patch("notifications.push_services.messaging.send_each", side_effect=fake_send_each())
+    def test_device_loading_does_not_grow_with_recipients(self, send_each, _app):
+        small, large = self.notifications_for(3), self.notifications_for(30)
+        with CaptureQueriesContext(connection) as small_queries:
+            send_claimed_notifications(small)
+        with CaptureQueriesContext(connection) as large_queries:
+            results = send_claimed_notifications(large)
+
+        self.assertEqual(len(large_queries), len(small_queries))
+        self.assertEqual(len(selects(large_queries)), 1)
+        self.assertEqual(len(large_queries), 1)
+        self.assertEqual([r.status for r in results], [Notification.PushStatus.SENT] * 30)
+        self.assertEqual([r.notification_id for r in results], [n.id for n in large])
+        self.assertEqual(len(sent_tokens(send_each)), 33)
+
+    @override_settings(PUSH_SEND_CHUNK_SIZE=2)
+    @patch("notifications.push_services.messaging.send_each", side_effect=fake_send_each())
+    def test_messages_are_sent_in_chunks(self, send_each, _app):
+        notifications = self.notifications_for(5)
+        results = send_claimed_notifications(notifications)
+        self.assertEqual([len(call.args[0]) for call in send_each.call_args_list], [2, 2, 1])
+        self.assertEqual({r.status for r in results}, {Notification.PushStatus.SENT})
+
+    @patch("notifications.push_services.messaging.send_each", side_effect=fake_send_each())
+    def test_only_recipients_active_devices_get_one_message_each(self, send_each, _app):
+        guardian = self.guardian()
+        first, second = self.device(guardian), self.device(guardian)
+        self.device(guardian, active=False)
+        self.device(self.guardian())  # not a recipient
+        notification = Notification.objects.create(
+            recipient=guardian, notification_type=Notification.NotificationType.GENERAL, title="T", body="B",
+        )
+
+        result, = send_claimed_notifications(self.claimed([notification.id]))
+
+        self.assertEqual(result.status, Notification.PushStatus.SENT)
+        self.assertCountEqual(result.delivered_device_ids, [str(first.id), str(second.id)])
+        self.assertCountEqual(sent_tokens(send_each), [first.fcm_token, second.fcm_token])
+
+    @patch("notifications.push_services.messaging.send_each")
+    def test_no_messages_means_send_each_is_never_called(self, send_each, _app):
+        without_devices = self.notifications_for(2, devices_per_user=0)
+        results = send_claimed_notifications(without_devices)
+        self.assertEqual({r.status for r in results}, {Notification.PushStatus.SKIPPED})
+        self.assertEqual(send_claimed_notifications([]), [])
+        send_each.assert_not_called()
+
+    def test_one_bad_token_does_not_stop_the_batch(self, _app):
+        bad, good = self.notifications_for(2)
+        bad_device = PushDevice.objects.get(user=bad.recipient)
+        good_device = PushDevice.objects.get(user=good.recipient)
+
+        with patch(
+            "notifications.push_services.messaging.send_each",
+            side_effect=fake_send_each({bad_device.fcm_token: messaging.UnregisteredError("unregistered")}),
+        ), self.assertLogs("notifications.push_services", level="WARNING"):
+            bad_result, good_result = send_claimed_notifications([bad, good])
+
+        bad_device.refresh_from_db()
+        self.assertFalse(bad_device.is_active)
+        self.assertEqual(bad_result.status, Notification.PushStatus.FAILED)
+        self.assertEqual(bad_result.error, "UnregisteredError")
+        self.assertEqual(good_result.status, Notification.PushStatus.SENT)
+        self.assertEqual(good_result.delivered_device_ids, [str(good_device.id)])
+
+    @patch("notifications.push_services.messaging.send_each", side_effect=RuntimeError("token-secret-value"))
+    def test_firebase_failure_is_contained_and_logs_no_token(self, _send_each, _app):
+        notifications = self.notifications_for(2)
+        with self.assertLogs("notifications.push_services", level="ERROR") as logs:
+            results = send_claimed_notifications(notifications)
+        output = "\n".join(logs.output)
+        self.assertEqual({r.status for r in results}, {Notification.PushStatus.PENDING})
+        self.assertNotIn("token-secret-value", output)
+        for device in PushDevice.objects.all():
+            self.assertNotIn(device.fcm_token, output)
+            self.assertTrue(device.is_active)
+        self.assertEqual(Notification.objects.count(), 2)
 
 
 class FanoutCallerTests(FanoutFixture):

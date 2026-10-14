@@ -24,10 +24,9 @@ def get_firebase_app():
         try:
             _firebase_app = firebase_admin.get_app()
         except ValueError:
-            options = (
-                {"projectId": settings.FIREBASE_PROJECT_ID}
-                if settings.FIREBASE_PROJECT_ID
-                else None
-            )
+            # Without httpTimeout the SDK waits up to 120 seconds per request.
+            options = {"httpTimeout": settings.FIREBASE_HTTP_TIMEOUT_SECONDS}
+            if settings.FIREBASE_PROJECT_ID:
+                options["projectId"] = settings.FIREBASE_PROJECT_ID
             _firebase_app = firebase_admin.initialize_app(options=options)
         return _firebase_app

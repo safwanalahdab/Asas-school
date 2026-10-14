@@ -74,6 +74,21 @@ def read_samesite_setting(name, *, default):
     return value
 
 
+def read_positive_int_setting(name, *, default, maximum=None):
+    """Read an integer setting that must be at least 1 (and at most ``maximum``)."""
+    try:
+        value = env.int(name, default=default)
+    except ValueError:
+        raise ImproperlyConfigured(f"{name} must be an integer.")
+
+    if value < 1:
+        raise ImproperlyConfigured(f"{name} must be at least 1.")
+    if maximum is not None and value > maximum:
+        raise ImproperlyConfigured(f"{name} must be at most {maximum}.")
+
+    return value
+
+
 # =========================================================
 # Core settings
 # =========================================================
@@ -340,6 +355,23 @@ if MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN < 1:
 
 FIREBASE_PUSH_ENABLED = env.bool("FIREBASE_PUSH_ENABLED", default=False)
 FIREBASE_PROJECT_ID = env("FIREBASE_PROJECT_ID", default="").strip()
+# Per-request HTTP timeout for Firebase calls; the SDK default is 120 seconds.
+FIREBASE_HTTP_TIMEOUT_SECONDS = read_positive_int_setting(
+    "FIREBASE_HTTP_TIMEOUT_SECONDS",
+    default=10,
+)
+
+# messaging.send_each opens one thread per message and accepts at most 500.
+PUSH_SEND_CHUNK_SIZE = read_positive_int_setting(
+    "PUSH_SEND_CHUNK_SIZE",
+    default=50,
+    maximum=500,
+)
+# The first attempt plus retries; after this many a pending push fails.
+PUSH_MAX_ATTEMPTS = read_positive_int_setting(
+    "PUSH_MAX_ATTEMPTS",
+    default=6,
+)
 
 
 # =========================================================
