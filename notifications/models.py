@@ -3,6 +3,7 @@ import uuid
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 
 
 def validate_notification_student_ownership(*, recipient, student):
@@ -42,6 +43,13 @@ class Notification(models.Model):
         APPOINTMENT = "appointment", "\u0627\u0644\u0645\u0648\u0627\u0639\u064a\u062f"
         GENERAL = "general", "\u0639\u0627\u0645"
 
+    class PushStatus(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+        SKIPPED = "skipped", "Skipped"
+        EXPIRED = "expired", "Expired"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -67,6 +75,22 @@ class Notification(models.Model):
     event_key = models.CharField(max_length=255, null=True, blank=True)
     is_read = models.BooleanField(default=False)
     read_at = models.DateTimeField(null=True, blank=True)
+    push_status = models.CharField(
+        max_length=10,
+        choices=PushStatus.choices,
+        default=PushStatus.PENDING,
+    )
+    push_attempts = models.PositiveSmallIntegerField(default=0)
+    push_next_attempt_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        default=timezone.now,
+    )
+    push_locked_until = models.DateTimeField(null=True, blank=True)
+    push_lease_token = models.UUIDField(null=True, blank=True)
+    push_sent_at = models.DateTimeField(null=True, blank=True)
+    push_last_error = models.CharField(max_length=100, blank=True, default="")
+    push_delivered_device_ids = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -102,6 +126,11 @@ class Notification(models.Model):
             models.Index(
                 fields=["recipient", "is_read", "created_at"],
                 name="notif_rec_read_created_idx",
+            ),
+            models.Index(
+                fields=["push_next_attempt_at"],
+                condition=models.Q(push_status="pending"),
+                name="notif_push_pending_due_idx",
             ),
         ]
 
