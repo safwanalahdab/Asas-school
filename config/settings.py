@@ -372,6 +372,28 @@ PUSH_MAX_ATTEMPTS = read_positive_int_setting(
     "PUSH_MAX_ATTEMPTS",
     default=6,
 )
+# Pending pushes older than this are expired instead of sent.
+PUSH_MAX_AGE_HOURS = read_positive_int_setting(
+    "PUSH_MAX_AGE_HOURS",
+    default=24,
+)
+# Notifications claimed per worker batch. With up to two devices each and
+# PUSH_SEND_CHUNK_SIZE=50, 50 notifications are at most two send_each calls,
+# which keeps the worst case well under PUSH_LEASE_SECONDS.
+PUSH_WORKER_BATCH_SIZE = read_positive_int_setting(
+    "PUSH_WORKER_BATCH_SIZE",
+    default=50,
+)
+# How long a claimed batch stays reserved for one worker.
+PUSH_LEASE_SECONDS = read_positive_int_setting(
+    "PUSH_LEASE_SECONDS",
+    default=300,
+)
+# Idle wait between polls when the last batch was not full.
+PUSH_WORKER_POLL_SECONDS = read_positive_int_setting(
+    "PUSH_WORKER_POLL_SECONDS",
+    default=3,
+)
 
 
 # =========================================================
