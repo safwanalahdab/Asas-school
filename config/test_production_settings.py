@@ -31,6 +31,13 @@ MANAGED_ENVIRONMENT_VARIABLES = {
     "FIREBASE_PUSH_ENABLED",
     "FIREBASE_PROJECT_ID",
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "FIREBASE_HTTP_TIMEOUT_SECONDS",
+    "PUSH_SEND_CHUNK_SIZE",
+    "PUSH_MAX_ATTEMPTS",
+    "PUSH_MAX_AGE_HOURS",
+    "PUSH_WORKER_BATCH_SIZE",
+    "PUSH_LEASE_SECONDS",
+    "PUSH_WORKER_POLL_SECONDS",
     "JWT_SIGNING_KEY",
     "JWT_ACCESS_COOKIE_NAME",
     "JWT_REFRESH_COOKIE_NAME",
@@ -74,6 +81,16 @@ DEVELOPMENT_ENVIRONMENT = {
     "DB_PASSWORD": TEST_DB_PASSWORD,
 }
 
+PUSH_WORKER_DEFAULTS = {
+    "FIREBASE_HTTP_TIMEOUT_SECONDS": 10,
+    "PUSH_SEND_CHUNK_SIZE": 50,
+    "PUSH_MAX_ATTEMPTS": 6,
+    "PUSH_MAX_AGE_HOURS": 24,
+    "PUSH_WORKER_BATCH_SIZE": 50,
+    "PUSH_LEASE_SECONDS": 300,
+    "PUSH_WORKER_POLL_SECONDS": 3,
+}
+
 INSPECTED_SETTINGS = [
     "DEBUG",
     "ALLOWED_HOSTS",
@@ -112,6 +129,13 @@ INSPECTED_SETTINGS = [
     "MEDIA_ROOT",
     "FIREBASE_PUSH_ENABLED",
     "FIREBASE_PROJECT_ID",
+    "FIREBASE_HTTP_TIMEOUT_SECONDS",
+    "PUSH_SEND_CHUNK_SIZE",
+    "PUSH_MAX_ATTEMPTS",
+    "PUSH_MAX_AGE_HOURS",
+    "PUSH_WORKER_BATCH_SIZE",
+    "PUSH_LEASE_SECONDS",
+    "PUSH_WORKER_POLL_SECONDS",
     "API_DOCS_ENABLED",
     "SPECTACULAR_SETTINGS",
     "CACHES",
@@ -339,6 +363,12 @@ class ProductionSettingsValidConfigurationTests(
 
     def test_firebase_disabled_by_default(self):
         self.assertIs(self.settings["FIREBASE_PUSH_ENABLED"], False)
+
+    def test_push_worker_settings_have_defaults(self):
+        self.assertEqual(
+            {name: self.settings[name] for name in PUSH_WORKER_DEFAULTS},
+            PUSH_WORKER_DEFAULTS,
+        )
 
     def test_default_cache_uses_postgresql_database_cache(self):
         caches = self.settings["CACHES"]
@@ -625,6 +655,27 @@ class ProductionSettingsValidationTests(
             GOOGLE_APPLICATION_CREDENTIALS="/srv/test-credentials.json",
         )
         self.assertIs(settings["FIREBASE_PUSH_ENABLED"], True)
+
+    def test_push_worker_settings_are_configurable(self):
+        overrides = {
+            name: str(value + 1) for name, value in PUSH_WORKER_DEFAULTS.items()
+        }
+        settings = self.assert_loads(**overrides)
+        self.assertEqual(
+            {name: settings[name] for name in PUSH_WORKER_DEFAULTS},
+            {name: value + 1 for name, value in PUSH_WORKER_DEFAULTS.items()},
+        )
+
+    def test_invalid_push_worker_settings_are_rejected(self):
+        for name in PUSH_WORKER_DEFAULTS:
+            for value in ("0", "-5", "not-a-number"):
+                with self.subTest(name=name, value=value):
+                    self.assert_rejected(name, **{name: value})
+
+        # send_each accepts at most 500 messages per call.
+        self.assert_rejected("PUSH_SEND_CHUNK_SIZE", PUSH_SEND_CHUNK_SIZE="501")
+        settings = self.assert_loads(PUSH_SEND_CHUNK_SIZE="500")
+        self.assertEqual(settings["PUSH_SEND_CHUNK_SIZE"], 500)
 
     def test_sensitive_values_do_not_appear_in_errors(self):
         short_secret = "short-secret-sentinel-value"

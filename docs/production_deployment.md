@@ -29,6 +29,9 @@ Supporting services:
 - Static assets are collected into `staticfiles/` and served by WhiteNoise.
   Nginx does not define a second `/static/` implementation.
 - Firebase Admin is optional and sends push notifications when enabled.
+  Requests never call Firebase: they store each notification as a pending
+  row, and a separate `asas-push-worker` systemd service sends it (section 8).
+  If the worker is not running, no push notification is delivered.
 - The frontend remains on Vercel under its real production domain.
 
 `NUM_PROXIES=1` is correct only while Nginx is the sole proxy in front of
@@ -145,6 +148,15 @@ SECURE_HSTS_PRELOAD=False
 FIREBASE_PUSH_ENABLED=False
 # FIREBASE_PROJECT_ID=<FIREBASE_PROJECT_ID>
 # GOOGLE_APPLICATION_CREDENTIALS=/etc/asas/firebase-service-account.json
+
+# Push worker (section 8). Every value must be a positive integer.
+FIREBASE_HTTP_TIMEOUT_SECONDS=10
+PUSH_SEND_CHUNK_SIZE=50
+PUSH_MAX_ATTEMPTS=6
+PUSH_MAX_AGE_HOURS=24
+PUSH_WORKER_BATCH_SIZE=50
+PUSH_LEASE_SECONDS=300
+PUSH_WORKER_POLL_SECONDS=3
 ```
 
 Production forces JWT, CSRF, and session cookies to Secure and HttpOnly where
@@ -312,7 +324,92 @@ sudo systemctl status asas-backend
 sudo journalctl -u asas-backend -f
 ```
 
-## 8. Nginx
+## 8. Push notification worker
+
+Requests do not send push notifications. Each new notification is stored as a
+`pending` row in `notifications_notification` (or `skipped` when
+`FIREBASE_PUSH_ENABLED=False` at creation time). The `run_push_worker`
+management command claims due rows in batches, sends them through Firebase
+outside any database transaction, and records the result:
+
+- `sent`: at least one device received it and nothing is left to retry.
+- `pending` again: a temporary Firebase or network error; retried after 30
+  seconds, 2 minutes, 10 minutes, 30 minutes, then every 2 hours, up to
+  `PUSH_MAX_ATTEMPTS` attempts in total.
+- `failed`: every device failed permanently, or the attempts ran out.
+- `skipped`: push disabled, recipient inactive or required to change their
+  password, or no active device.
+- `expired`: still pending `PUSH_MAX_AGE_HOURS` after creation; never sent.
+
+Notifications stay visible in the app whatever their push status.
+
+Create `/etc/systemd/system/asas-push-worker.service`:
+
+```ini
+[Unit]
+Description=Asas push notification worker
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=asas
+Group=asas
+WorkingDirectory=/var/www/asas/backend
+EnvironmentFile=/etc/asas/backend.env
+UMask=0027
+ExecStart=/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py run_push_worker --settings=config.production_settings
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
+```
+
+It uses the same account and environment file as Gunicorn, so it reads the
+same database and Firebase credentials. Run it even while
+`FIREBASE_PUSH_ENABLED=False`: it then marks rows left pending from an earlier
+enabled period as `skipped`.
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now asas-push-worker
+sudo systemctl status asas-push-worker
+sudo journalctl -u asas-push-worker -f
+```
+
+Behaviour to know when operating it:
+
+- On `SIGTERM` (stop, restart, deploy) the worker finishes the current batch
+  and exits with status 0. A batch normally takes seconds. If Firebase is
+  slow enough that it exceeds `TimeoutStopSec`, systemd kills it; the claimed
+  rows are retried by the next worker once their lease
+  (`PUSH_LEASE_SECONDS`) expires. A notification may then reach a device
+  twice; Android `collapse_key`/`tag` and iOS `apns-collapse-id` make the
+  second copy replace the first.
+- Database or unexpected errors are logged and retried with a growing pause of
+  up to 60 seconds; the process does not exit. `Restart=always` covers crashes.
+- One worker is enough. A second instance is safe (rows are leased with
+  `SELECT ... FOR UPDATE SKIP LOCKED` and a lease token) but is only useful for
+  higher volume.
+- The worker holds one PostgreSQL connection; include it when sizing
+  `max_connections`.
+- Each batch with work logs one line such as
+  `Push batch claimed=50 sent=48 retry=2 failed=0 skipped=0 expired=0 lease_lost=0`.
+  Logs contain notification and device ids and error type names only, never
+  tokens, titles, or bodies.
+
+Lease sizing: with the defaults a batch is at most 50 notifications times two
+devices, which is two `send_each` calls of 50 messages sent in parallel. One
+Firebase request can take up to 5 attempts of 10 seconds plus 7 seconds of SDK
+backoff (57 seconds), or about 101 seconds counting the SDK's extra connect and
+read retries, so a batch stays near 114 to 202 seconds in the worst case,
+below the 300-second lease. Raising `PUSH_WORKER_BATCH_SIZE` or
+`FIREBASE_HTTP_TIMEOUT_SECONDS` requires raising `PUSH_LEASE_SECONDS` to match.
+
+## 9. Nginx
 
 Create a site such as `/etc/nginx/sites-available/asas-backend`, replacing the
 domain and certificate placeholders. This configuration intentionally has no
@@ -387,7 +484,7 @@ Ubuntu's packaged logrotate policy normally covers `/var/log/nginx/*.log`.
 Confirm that both named log files are matched and rotated; add a dedicated
 logrotate rule only if the installed package policy does not cover them.
 
-## 9. HTTPS and domains
+## 10. HTTPS and domains
 
 1. Point the backend DNS record to the server's public address.
 2. Confirm HTTP reaches the intended Nginx virtual host.
@@ -412,7 +509,7 @@ separate irreversible-impact review. Keep `ALLOWED_HOSTS`, `BACKEND_ORIGINS`,
 `FRONTEND_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, and the real Vercel production
 origin aligned. Do not use broad wildcards.
 
-## 10. Firewall
+## 11. Firewall
 
 Confirm the actual SSH port before enabling UFW, or remote access can be lost.
 
@@ -428,7 +525,7 @@ Do not allow 5432 or a Gunicorn TCP port publicly. Gunicorn uses a Unix
 socket. Also verify provider-level firewall/security-group rules; UFW is not a
 substitute for them.
 
-## 11. Deployment procedure
+## 12. Deployment procedure
 
 Run release commands as the application user unless a step explicitly needs
 root. Never delete or replace `/var/www/asas/media` during deployment.
@@ -464,17 +561,22 @@ Then:
 sudo install -d -o asas -g www-data -m 2750 /var/www/asas/media
 sudo systemctl status postgresql
 sudo -u postgres psql -d <DATABASE_NAME> -c "SELECT to_regclass('public.asas_cache');"
-sudo systemctl restart asas-backend
+# Restart both together, after migrate, so they run the same release.
+sudo systemctl restart asas-backend asas-push-worker
 sudo nginx -t
 sudo systemctl reload nginx
-sudo systemctl status asas-backend nginx
+sudo systemctl status asas-backend asas-push-worker nginx
 ```
+
+On the first deployment that includes the push worker, install its unit
+(section 8) and run `sudo systemctl enable --now asas-push-worker` instead of
+restarting it.
 
 For routine releases, use a reviewed immutable commit or release directory
 rather than an unreviewed working tree. Take the database backup before
 migrations. Keep the previous commit/release available until smoke tests pass.
 
-## 12. Backup and restore policy
+## 13. Backup and restore policy
 
 Back up PostgreSQL and media daily. Keep multiple retention tiers appropriate
 to school policy, store at least one encrypted copy off-host, monitor backup
@@ -507,7 +609,7 @@ Do not place Firebase credentials or the environment file in a general
 unencrypted archive. If configuration recovery is required, back them up with
 separate encryption and restricted access.
 
-## 13. Monitoring and logs
+## 14. Monitoring and logs
 
 Monitor at minimum:
 
@@ -522,16 +624,68 @@ Monitor at minimum:
   `SELECT count(*) FROM asas_cache;` and
   `SELECT pg_size_pretty(pg_total_relation_size('asas_cache'));`), and HTTP 500
   responses on login or other throttled endpoints.
-- Firebase push failures when enabled.
+- The push worker: `asas-push-worker` must be active, and
+  `push_queue_status` must pass every minute (below). **If the worker is
+  stopped, no push notification is sent**; notifications still appear in the
+  app, and pending ones expire after `PUSH_MAX_AGE_HOURS`. Also alert on
+  `ERROR` lines from `notifications.push_services` in its journal:
+  `ThirdPartyAuthError`, `PermissionDeniedError`, or `UnauthenticatedError`
+  mean the Firebase credentials or project settings are broken.
 - HTTP 429 rate and unexpected login-throttle changes.
 - TLS expiry and Certbot renewal status.
 - `/health/` status and latency.
 
 Useful built-in commands:
 
+`push_queue_status` prints the number of notifications in each push status
+and exits non-zero when a due pending push has waited longer than
+`--max-age-seconds` (default 300), which means the worker is stopped, stuck,
+or cannot reach the database. Run it every minute with a systemd timer.
+`/etc/systemd/system/asas-push-queue-check.service`:
+
+```ini
+[Unit]
+Description=Asas push queue check
+OnFailure=<OPERATOR_ALERT_UNIT>
+
+[Service]
+Type=oneshot
+User=asas
+Group=asas
+WorkingDirectory=/var/www/asas/backend
+EnvironmentFile=/etc/asas/backend.env
+ExecStart=/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py push_queue_status --max-age-seconds 300 --settings=config.production_settings
+```
+
+`/etc/systemd/system/asas-push-queue-check.timer`:
+
+```ini
+[Unit]
+Description=Run the Asas push queue check every minute
+
+[Timer]
+OnCalendar=minutely
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now asas-push-queue-check.timer
+```
+
+Replace `<OPERATOR_ALERT_UNIT>` with the operator's alerting unit, or remove
+that line and alert on failed `asas-push-queue-check.service` runs from the
+existing monitoring system. The check counts every notification by status,
+so it scans the notifications table once a minute.
+
 ```bash
 sudo journalctl -u asas-backend --since "1 hour ago"
-sudo systemctl status asas-backend nginx postgresql
+sudo journalctl -u asas-push-worker --since "1 hour ago"
+sudo -u asas sh -c 'set -a; . /etc/asas/backend.env; set +a; /var/www/asas/venv/bin/python /var/www/asas/backend/manage.py push_queue_status --settings=config.production_settings'
+sudo systemctl status asas-backend asas-push-worker nginx postgresql
 sudo tail -f /var/log/nginx/asas_error.log
 df -h
 df -i
@@ -540,7 +694,7 @@ df -i
 No paid monitoring platform is mandatory; integrate these checks with the
 operator's existing monitoring system.
 
-## 14. Post-deployment smoke test
+## 15. Post-deployment smoke test
 
 Complete this checklist from controlled Web, Mobile, and server clients:
 
@@ -563,14 +717,18 @@ Complete this checklist from controlled Web, Mobile, and server clients:
 - [ ] PostgreSQL data survives an application and database service restart.
 - [ ] `SELECT to_regclass('public.asas_cache');` returns `asas_cache` and the
       cache read/write check from section 6 prints `cache ok`.
-- [ ] A Firebase notification is delivered when Firebase is enabled.
+- [ ] `asas-push-worker` is active, `push_queue_status` exits 0, and the
+      `asas-push-queue-check.timer` is listed by `systemctl list-timers`.
+- [ ] When Firebase is enabled, a test notification reaches a device within a
+      few seconds and its row becomes `sent`; the worker journal shows a
+      `Push batch` line.
 - [ ] Media files survive Gunicorn restart and a subsequent deployment.
 
 The application accepts attachments up to 5 MiB. Nginx uses
 `client_max_body_size 7m` to leave multipart overhead without replacing the
 application's validation.
 
-## 15. Rollback
+## 16. Rollback
 
 Before a release, record the current commit/release, back up PostgreSQL, and
 retain the previous environment-compatible artifact. If rollback is required:
@@ -590,7 +748,34 @@ retain the previous environment-compatible artifact. If rollback is required:
 Rollback is a release-specific decision; code rollback and database rollback
 are not automatically equivalent.
 
-## 16. Deferred decisions and accepted risks
+### Rolling back to a release without the push worker
+
+1. First, before restoring the previous code, stop the worker and its check:
+
+   ```bash
+   sudo systemctl disable --now asas-push-worker
+   sudo systemctl disable --now asas-push-queue-check.timer
+   ```
+
+   The previous code has no `run_push_worker` command; with `Restart=always`
+   the unit would otherwise fail and restart every 5 seconds, and the queue
+   check would keep alerting.
+2. Restore the previous code and restart `asas-backend` as in the general
+   steps above. **No reverse migration is needed.** Migration
+   `notifications.0003_notification_push_outbox` only adds columns, and its
+   `NOT NULL` columns keep database defaults (`db_default`), so the previous
+   code inserts notifications exactly as before. The new columns are ignored
+   by it.
+3. The previous code sends push inside the request again. Rows it inserts get
+   `push_status = 'skipped'` from the database default.
+4. Notifications created by the newer release that were still `pending` at
+   rollback receive no push after it. They stay visible in the app.
+5. When rolling forward again, re-enable both units (section 8 and section 14).
+   Rows written by the previous code are `skipped` and are never sent twice.
+   Rows still `pending` from before the rollback are sent if they are younger
+   than `PUSH_MAX_AGE_HOURS`, otherwise marked `expired`.
+
+## 17. Deferred decisions and accepted risks
 
 - Media is currently public by link. UUID paths reduce guessing but do not
   provide authorization.

@@ -75,12 +75,16 @@ class Notification(models.Model):
     event_key = models.CharField(max_length=255, null=True, blank=True)
     is_read = models.BooleanField(default=False)
     read_at = models.DateTimeField(null=True, blank=True)
+    # The ORM writes ``default``. ``db_default`` stays on the columns so rows
+    # inserted without them (existing rows, code from before the outbox) are
+    # skipped, never pushed by the worker.
     push_status = models.CharField(
         max_length=10,
         choices=PushStatus.choices,
         default=PushStatus.PENDING,
+        db_default=PushStatus.SKIPPED,
     )
-    push_attempts = models.PositiveSmallIntegerField(default=0)
+    push_attempts = models.PositiveSmallIntegerField(default=0, db_default=0)
     push_next_attempt_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -89,8 +93,8 @@ class Notification(models.Model):
     push_locked_until = models.DateTimeField(null=True, blank=True)
     push_lease_token = models.UUIDField(null=True, blank=True)
     push_sent_at = models.DateTimeField(null=True, blank=True)
-    push_last_error = models.CharField(max_length=100, blank=True, default="")
-    push_delivered_device_ids = models.JSONField(default=list, blank=True)
+    push_last_error = models.CharField(max_length=100, blank=True, default="", db_default="")
+    push_delivered_device_ids = models.JSONField(default=list, blank=True, db_default=[])
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

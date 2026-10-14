@@ -5,10 +5,30 @@ from .models import Notification, PushDevice
 
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):
-    list_display = ("recipient", "notification_type", "title", "is_read", "created_at")
-    list_filter = ("notification_type", "is_read")
+    list_display = (
+        "recipient",
+        "notification_type",
+        "title",
+        "is_read",
+        "push_status",
+        "created_at",
+    )
+    list_filter = ("notification_type", "is_read", "push_status")
     search_fields = ("recipient__username", "title", "body", "event_key")
-    readonly_fields = ("created_at", "updated_at")
+    # Push state belongs to run_push_worker; editing it here could resend or
+    # silently drop a push.
+    readonly_fields = (
+        "push_status",
+        "push_attempts",
+        "push_next_attempt_at",
+        "push_locked_until",
+        "push_lease_token",
+        "push_sent_at",
+        "push_last_error",
+        "push_delivered_device_ids",
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(PushDevice)

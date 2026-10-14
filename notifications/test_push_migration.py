@@ -1,6 +1,9 @@
+import uuid
+
 from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.test import TransactionTestCase
+from django.utils import timezone
 
 
 class NotificationPushOutboxMigrationTests(TransactionTestCase):
@@ -20,6 +23,8 @@ class NotificationPushOutboxMigrationTests(TransactionTestCase):
         old_apps = executor.loader.project_state(targets).apps
         User = old_apps.get_model("accounts", "User")
         Notification = old_apps.get_model("notifications", "Notification")
+        # The columns code from before the outbox writes on every insert.
+        self.pre_outbox_fields = list(Notification._meta.concrete_fields)
 
         self.guardian_pk = User.objects.create(
             username="push-migration-guardian",
@@ -72,3 +77,46 @@ class NotificationPushOutboxMigrationTests(TransactionTestCase):
         self.assertEqual(created.push_attempts, 0)
         self.assertIsNotNone(created.push_next_attempt_at)
         self.assertEqual(created.push_delivered_device_ids, [])
+
+    def test_insert_without_push_columns_is_skipped(self):
+        """Code from before the outbox (e.g. after a rollback) can still insert."""
+        Notification = self.apps.get_model("notifications", "Notification")
+        notification_id = uuid.uuid4()
+        now = timezone.now()
+        values = {
+            "id": notification_id,
+            "recipient": self.guardian_pk,
+            "notification_type": "general",
+            "title": "Pre-outbox code",
+            "body": "Body",
+            "student": None,
+            "resource_type": "",
+            "resource_id": None,
+            "event_key": None,
+            "is_read": False,
+            "read_at": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.assertEqual({field.name for field in self.pre_outbox_fields}, set(values))
+        quote = connection.ops.quote_name
+        columns = ", ".join(quote(field.column) for field in self.pre_outbox_fields)
+        placeholders = ", ".join(["%s"] * len(self.pre_outbox_fields))
+        params = [
+            field.get_db_prep_value(values[field.name], connection)
+            for field in self.pre_outbox_fields
+        ]
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"INSERT INTO {quote(Notification._meta.db_table)} ({columns}) "
+                f"VALUES ({placeholders})",
+                params,
+            )
+
+        row = Notification.objects.get(pk=notification_id)
+        self.assertEqual(row.push_status, "skipped")
+        self.assertEqual(row.push_attempts, 0)
+        self.assertEqual(row.push_last_error, "")
+        self.assertEqual(row.push_delivered_device_ids, [])
+        self.assertIsNone(row.push_next_attempt_at)
+        self.assertIsNone(row.push_lease_token)

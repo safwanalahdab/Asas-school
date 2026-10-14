@@ -1,10 +1,11 @@
 import uuid
 from datetime import date, timedelta
 
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 
 from notifications.models import Notification
@@ -146,3 +147,17 @@ class NotificationModelTests(TestCase):
     def test_read_notification_requires_read_at(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             self.make_notification(is_read=True).save()
+
+
+class NotificationAdminTests(SimpleTestCase):
+    def test_push_status_is_listed_and_every_push_field_is_read_only(self):
+        model_admin = admin.site._registry[Notification]
+        push_fields = {
+            field.name for field in Notification._meta.get_fields()
+            if field.name.startswith("push_")
+        }
+
+        self.assertIn("push_status", model_admin.list_display)
+        self.assertIn("push_status", model_admin.list_filter)
+        self.assertEqual(len(push_fields), 8)
+        self.assertLessEqual(push_fields, set(model_admin.readonly_fields))

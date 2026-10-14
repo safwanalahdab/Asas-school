@@ -18,22 +18,21 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Existing rows become "skipped" so the push worker never sends
-        # stale notifications created before the outbox existed.
+        # db_default stays on the NOT NULL columns. Existing rows, and rows
+        # inserted later by code that predates these columns (after a
+        # rollback), become "skipped" and are never sent by the worker.
+        # The ORM still writes the model default ("pending") for new rows.
         migrations.AddField(
             model_name='notification',
             name='push_status',
-            field=models.CharField(choices=PUSH_STATUS_CHOICES, default='skipped', max_length=10),
-        ),
-        migrations.AlterField(
-            model_name='notification',
-            name='push_status',
-            field=models.CharField(choices=PUSH_STATUS_CHOICES, default='pending', max_length=10),
+            field=models.CharField(
+                choices=PUSH_STATUS_CHOICES, db_default='skipped', default='pending', max_length=10,
+            ),
         ),
         migrations.AddField(
             model_name='notification',
             name='push_attempts',
-            field=models.PositiveSmallIntegerField(default=0),
+            field=models.PositiveSmallIntegerField(db_default=0, default=0),
         ),
         migrations.AddField(
             model_name='notification',
@@ -58,12 +57,12 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='notification',
             name='push_last_error',
-            field=models.CharField(blank=True, default='', max_length=100),
+            field=models.CharField(blank=True, db_default='', default='', max_length=100),
         ),
         migrations.AddField(
             model_name='notification',
             name='push_delivered_device_ids',
-            field=models.JSONField(blank=True, default=list),
+            field=models.JSONField(blank=True, db_default=[], default=list),
         ),
         migrations.AddIndex(
             model_name='notification',
