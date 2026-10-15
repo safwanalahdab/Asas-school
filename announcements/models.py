@@ -67,3 +67,20 @@ class Announcement(models.Model):
     updated_at = models.DateTimeField(
         auto_now=True,
     )
+
+    # Set once the publish notifications were handled: created, or skipped
+    # because the announcement had already expired. NULL means still due.
+    publish_notified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False,
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["publish_date"],
+                name="announce_notify_due_idx",
+                condition=models.Q(publish_notified_at__isnull=True),
+            ),
+        ]
