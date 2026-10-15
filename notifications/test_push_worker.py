@@ -1,6 +1,7 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from decimal import Decimal
 from io import StringIO
 from threading import Barrier
 from unittest import skipUnless
@@ -11,15 +12,21 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import DatabaseError, connection, connections, transaction
 from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from firebase_admin import exceptions as firebase_exceptions
 from firebase_admin import messaging
+
+from academics.models import Term
+from grades.models import StudentScore
+from grades.services import create_assessment, publish_section_assessments
 
 from .models import Notification, PushDevice
 from .push_services import PushAttemptResult
 from .push_testing import fake_send_each, sent_tokens
 from .push_worker import BatchSummary, PushWorker, claim_batch, process_batch, record_results
 from .services import create_notification
+from .test_fanout_performance import FanoutFixture
 
 
 User = get_user_model()
@@ -322,6 +329,23 @@ class PushWorkerTests(PushWorkerFixture, TestCase):
                 self.assertEqual(self.reload(notification).push_status, Notification.PushStatus.SKIPPED)
                 send_each.assert_not_called()
 
+    def test_send_each_is_never_called_with_an_empty_list(self, _app):
+        # Claimed rows with nothing to send: no device at all, and a device
+        # that already received the notification on an earlier attempt.
+        without_devices = self.notify(self.make_guardian("worker-empty-batch"))
+        device = self.device(self.guardian)
+        delivered = self.notify(self.guardian)
+        Notification.objects.filter(pk=delivered.pk).update(
+            push_attempts=1, push_delivered_device_ids=[str(device.id)],
+        )
+
+        summary, send_each = self.run_batch()
+
+        send_each.assert_not_called()
+        self.assertEqual(summary, BatchSummary(claimed=2, sent=1, skipped=1))
+        self.assertEqual(self.reload(without_devices).push_status, Notification.PushStatus.SKIPPED)
+        self.assertEqual(self.reload(delivered).push_status, Notification.PushStatus.SENT)
+
     def test_firebase_initialization_failure_retries_the_batch(self, get_app):
         get_app.side_effect = RuntimeError("bad credentials")
         self.device(self.guardian)
@@ -353,6 +377,54 @@ class PushWorkerTests(PushWorkerFixture, TestCase):
                 self.assertIn(f"error={type(error).__name__}", self.output)
                 self.assertNotIn(device.fcm_token, self.output)
                 self.assertEqual(self.reload(notification).push_status, Notification.PushStatus.PENDING)
+
+
+@PUSH_SETTINGS
+class GradePublishPushPerformanceTests(FanoutFixture):
+    """Publishing a whole class only queues pushes; Firebase is never called."""
+
+    @patch("firebase_admin.messaging.send_each")
+    @patch("firebase_admin.messaging.send")
+    def test_class_publish_never_calls_firebase_and_queries_stay_constant(self, send, send_each):
+        term = Term.objects.create(
+            academic_year=self.year, number=Term.Number.FIRST,
+            start_date=self.year.start_date, end_date=self.year.end_date,
+        )
+
+        def publish_class(size, name):
+            section = self.section(name)
+            families = [self.family(section) for _ in range(size)]
+            assessment = create_assessment(
+                section=section, grade_subject=self.plan, term=term, title=f"Publish {name}",
+                max_score=Decimal("20"), assessment_date=self.today, actor=self.admin,
+            )
+            for guardian, _student, enrollment in families:
+                self.device(guardian)
+                StudentScore.objects.create(
+                    assessment=assessment, enrollment=enrollment, recorded_section=section,
+                    score=Decimal("15"), updated_by=self.admin,
+                )
+            # Commit callbacks run inside the capture, so any push sent after
+            # commit would show up in the query count and the mocks.
+            with CaptureQueriesContext(connection) as queries,                     self.captureOnCommitCallbacks(execute=True):
+                result = publish_section_assessments(section=section, term=term, actor=self.admin)
+            self.assertEqual(result["published_count"], 1)
+            self.assertEqual(
+                list(
+                    Notification.objects.filter(
+                        notification_type="grades",
+                        student__in=[student for _, student, _ in families],
+                    ).values_list("push_status", flat=True)
+                ),
+                [Notification.PushStatus.PENDING] * size,
+            )
+            return queries
+
+        small, large = publish_class(3, "Small"), publish_class(30, "Large")
+
+        self.assertEqual(len(large), len(small))
+        send.assert_not_called()
+        send_each.assert_not_called()
 
 
 @override_settings(PUSH_WORKER_BATCH_SIZE=50, PUSH_WORKER_POLL_SECONDS=3)
