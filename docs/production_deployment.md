@@ -157,6 +157,9 @@ PUSH_MAX_AGE_HOURS=24
 PUSH_WORKER_BATCH_SIZE=50
 PUSH_LEASE_SECONDS=300
 PUSH_WORKER_POLL_SECONDS=3
+
+# Scheduled announcement notifications (section 8). Local hour, 0 to 23.
+ANNOUNCEMENT_NOTIFY_HOUR=7
 ```
 
 Production forces JWT, CSRF, and session cookies to Secure and HttpOnly where
@@ -409,6 +412,89 @@ read retries, so a batch stays near 114 to 202 seconds in the worst case,
 below the 300-second lease. Raising `PUSH_WORKER_BATCH_SIZE` or
 `FIREBASE_HTTP_TIMEOUT_SECONDS` requires raising `PUSH_LEASE_SECONDS` to match.
 
+### Scheduled announcement notifications
+
+An announcement whose publish date is today or earlier notifies its guardians
+when it is created, or when an edit moves its publish date to today. An
+announcement with a future publish date appears in the app from midnight of
+that date, but its notifications are created by the
+`notify_due_announcements` management command: once, on the first run on or
+after `ANNOUNCEMENT_NOTIFY_HOUR` local time (Asia/Damascus, default 7) on that
+date, so guardians are not notified in the middle of the night. Before that
+hour the command does nothing.
+
+The command only stores `pending` notifications; the push worker above sends
+them. Both must run.
+
+- Each announcement is handled once. `announcements_announcement.publish_notified_at`
+  records it; an announcement that has already expired by then is marked
+  without notifications.
+- Two runs at the same time are safe: each announcement is locked with
+  `SELECT ... FOR UPDATE SKIP LOCKED`, and the existing notification
+  `event_key` prevents a guardian from receiving the same notification twice.
+- If one announcement fails, the run logs
+  `Scheduled announcement notification failed announcement_id=<id> error=<type>`
+  at `ERROR`, continues with the others, and the next run retries it. Logs
+  contain announcement ids and counts only.
+- Nothing is re-sent: editing an announcement that was already notified
+  (title, content, or targets, including adding sections) creates no new
+  notifications.
+
+> **Warning: Django Admin.** Announcements created in `/admin/` do not notify
+> on save, but this command notifies them: any announcement created from
+> `/admin/` in production whose publish date has arrived (including a past
+> date) and that has not expired reaches the targeted guardians on the next
+> run after `ANNOUNCEMENT_NOTIFY_HOUR`. **Never create test announcements from
+> `/admin/` in production.**
+
+Create `/etc/systemd/system/asas-announcement-notify.service`:
+
+```ini
+[Unit]
+Description=Asas scheduled announcement notifications
+After=network.target postgresql.service
+Wants=postgresql.service
+OnFailure=<OPERATOR_ALERT_UNIT>
+
+[Service]
+Type=oneshot
+User=asas
+Group=asas
+WorkingDirectory=/var/www/asas/backend
+EnvironmentFile=/etc/asas/backend.env
+UMask=0027
+ExecStart=/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py notify_due_announcements --settings=config.production_settings
+```
+
+`/etc/systemd/system/asas-announcement-notify.timer`:
+
+```ini
+[Unit]
+Description=Run Asas scheduled announcement notifications every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now asas-announcement-notify.timer
+sudo systemctl list-timers asas-announcement-notify.timer
+sudo journalctl -u asas-announcement-notify --since today
+```
+
+Each run prints one line such as `announcements_notified: 0` and exits with
+status 0, also when nothing was due or one announcement failed. A non-zero
+exit (for example the database is unreachable) triggers `OnFailure`; replace
+`<OPERATOR_ALERT_UNIT>` as for the push queue check (section 14), or remove
+that line. The command reads `ANNOUNCEMENT_NOTIFY_HOUR` on every run, so
+changing it in `/etc/asas/backend.env` needs no restart. Each run is a new
+process, so a deployment also needs no restart of this unit.
+
 ## 9. Nginx
 
 Create a site such as `/etc/nginx/sites-available/asas-backend`, replacing the
@@ -572,6 +658,14 @@ On the first deployment that includes the push worker, install its unit
 (section 8) and run `sudo systemctl enable --now asas-push-worker` instead of
 restarting it.
 
+On the first deployment that includes scheduled announcement notifications,
+after `migrate`, install the `asas-announcement-notify` units (section 8) and
+run `sudo systemctl enable --now asas-announcement-notify.timer`. Migration
+`announcements.0002_announcement_publish_notified_at` marks every announcement
+whose publish date is today or earlier as already notified, so enabling the
+timer sends nothing for old announcements; only future-dated ones are notified
+on their date.
+
 For routine releases, use a reviewed immutable commit or release directory
 rather than an unreviewed working tree. Take the database backup before
 migrations. Keep the previous commit/release available until smoke tests pass.
@@ -631,6 +725,12 @@ Monitor at minimum:
   `ERROR` lines from `notifications.push_services` in its journal:
   `ThirdPartyAuthError`, `PermissionDeniedError`, or `UnauthenticatedError`
   mean the Firebase credentials or project settings are broken.
+- Scheduled announcement notifications: `asas-announcement-notify.timer` must
+  be active (`systemctl list-timers`). **If it is stopped, future-dated
+  announcements appear in the app on their date but no guardian is
+  notified.** Any `ERROR` line from `announcements` in its journal needs
+  attention; the failed announcement is retried every 5 minutes until it
+  succeeds.
 - HTTP 429 rate and unexpected login-throttle changes.
 - TLS expiry and Certbot renewal status.
 - `/health/` status and latency.
@@ -684,6 +784,7 @@ so it scans the notifications table once a minute.
 ```bash
 sudo journalctl -u asas-backend --since "1 hour ago"
 sudo journalctl -u asas-push-worker --since "1 hour ago"
+sudo journalctl -u asas-announcement-notify --since today
 sudo -u asas sh -c 'set -a; . /etc/asas/backend.env; set +a; /var/www/asas/venv/bin/python /var/www/asas/backend/manage.py push_queue_status --settings=config.production_settings'
 sudo systemctl status asas-backend asas-push-worker nginx postgresql
 sudo tail -f /var/log/nginx/asas_error.log
@@ -774,6 +875,28 @@ are not automatically equivalent.
    Rows written by the previous code are `skipped` and are never sent twice.
    Rows still `pending` from before the rollback are sent if they are younger
    than `PUSH_MAX_AGE_HOURS`, otherwise marked `expired`.
+
+### Rolling back to a release without scheduled announcement notifications
+
+1. First, before restoring the previous code, stop the timer:
+
+   ```bash
+   sudo systemctl disable --now asas-announcement-notify.timer
+   ```
+
+   The previous code has no `notify_due_announcements` command; the unit
+   would otherwise fail every 5 minutes.
+2. Restore the previous code as in the general steps above. **No reverse
+   migration is needed.** `publish_notified_at` is nullable and ignored by the
+   previous code, which inserts announcements with it empty.
+3. While rolled back, future-dated announcements are again never notified,
+   as before this feature.
+4. When rolling forward again, re-enable the timer (section 8). Announcements
+   created by the previous code are handled once on the next run after
+   `ANNOUNCEMENT_NOTIFY_HOUR`: those already notified by the previous code at
+   creation get no duplicate, because the `event_key` matches the existing
+   notification. Future-dated ones whose date passed during the rollback are
+   notified then, late, unless they have expired.
 
 ## 17. Deferred decisions and accepted risks
 

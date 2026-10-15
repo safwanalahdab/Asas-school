@@ -38,6 +38,7 @@ MANAGED_ENVIRONMENT_VARIABLES = {
     "PUSH_WORKER_BATCH_SIZE",
     "PUSH_LEASE_SECONDS",
     "PUSH_WORKER_POLL_SECONDS",
+    "ANNOUNCEMENT_NOTIFY_HOUR",
     "JWT_SIGNING_KEY",
     "JWT_ACCESS_COOKIE_NAME",
     "JWT_REFRESH_COOKIE_NAME",
@@ -136,6 +137,7 @@ INSPECTED_SETTINGS = [
     "PUSH_WORKER_BATCH_SIZE",
     "PUSH_LEASE_SECONDS",
     "PUSH_WORKER_POLL_SECONDS",
+    "ANNOUNCEMENT_NOTIFY_HOUR",
     "API_DOCS_ENABLED",
     "SPECTACULAR_SETTINGS",
     "CACHES",
@@ -369,6 +371,9 @@ class ProductionSettingsValidConfigurationTests(
             {name: self.settings[name] for name in PUSH_WORKER_DEFAULTS},
             PUSH_WORKER_DEFAULTS,
         )
+
+    def test_announcement_notify_hour_defaults_to_seven(self):
+        self.assertEqual(self.settings["ANNOUNCEMENT_NOTIFY_HOUR"], 7)
 
     def test_default_cache_uses_postgresql_database_cache(self):
         caches = self.settings["CACHES"]
@@ -676,6 +681,19 @@ class ProductionSettingsValidationTests(
         self.assert_rejected("PUSH_SEND_CHUNK_SIZE", PUSH_SEND_CHUNK_SIZE="501")
         settings = self.assert_loads(PUSH_SEND_CHUNK_SIZE="500")
         self.assertEqual(settings["PUSH_SEND_CHUNK_SIZE"], 500)
+
+    def test_announcement_notify_hour_accepts_every_hour_of_the_day(self):
+        for value in ("0", "23"):
+            with self.subTest(value=value):
+                settings = self.assert_loads(ANNOUNCEMENT_NOTIFY_HOUR=value)
+                self.assertEqual(settings["ANNOUNCEMENT_NOTIFY_HOUR"], int(value))
+
+    def test_invalid_announcement_notify_hour_is_rejected(self):
+        for value in ("24", "-1", "abc"):
+            with self.subTest(value=value):
+                self.assert_rejected(
+                    "ANNOUNCEMENT_NOTIFY_HOUR", ANNOUNCEMENT_NOTIFY_HOUR=value,
+                )
 
     def test_sensitive_values_do_not_appear_in_errors(self):
         short_secret = "short-secret-sentinel-value"
