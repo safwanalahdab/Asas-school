@@ -89,6 +89,19 @@ def read_positive_int_setting(name, *, default, maximum=None):
     return value
 
 
+def read_hour_setting(name, *, default):
+    """Read an hour of the day, 0 to 23."""
+    try:
+        value = env.int(name, default=default)
+    except ValueError:
+        raise ImproperlyConfigured(f"{name} must be an integer.")
+
+    if not 0 <= value <= 23:
+        raise ImproperlyConfigured(f"{name} must be an hour from 0 to 23.")
+
+    return value
+
+
 # =========================================================
 # Core settings
 # =========================================================
@@ -393,6 +406,13 @@ PUSH_LEASE_SECONDS = read_positive_int_setting(
 PUSH_WORKER_POLL_SECONDS = read_positive_int_setting(
     "PUSH_WORKER_POLL_SECONDS",
     default=3,
+)
+# Local hour (TIME_ZONE) from which notify_due_announcements notifies
+# announcements whose publish date is today, so guardians are not notified
+# at midnight.
+ANNOUNCEMENT_NOTIFY_HOUR = read_hour_setting(
+    "ANNOUNCEMENT_NOTIFY_HOUR",
+    default=7,
 )
 
 

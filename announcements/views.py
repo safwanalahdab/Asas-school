@@ -294,8 +294,19 @@ class AnnouncementViewSet(
             Announcement, serializer.validated_data.get("attachment"),
         ), transaction.atomic():
             self.require_supervisor_targets(serializer)
+            # Lock the row and take the flag from the database, so this full
+            # save cannot write back a stale NULL after the scheduled job set it.
+            serializer.instance.publish_notified_at = (
+                Announcement.objects.select_for_update()
+                .values_list("publish_notified_at", flat=True)
+                .get(pk=serializer.instance.pk)
+            )
             announcement = serializer.save()
             delete_replaced_attachment_on_commit(announcement, previous_name)
+            # A scheduled announcement moved to today is notified now; one
+            # already notified is not notified again.
+            if announcement.publish_notified_at is None:
+                notify_announcement_published(announcement)
         serializer.instance = self._reload_for_response(announcement)
 
     def _reload_for_response(self, announcement):
