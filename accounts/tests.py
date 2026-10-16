@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed, ErrorDetail, ValidationError
@@ -695,6 +696,7 @@ class WebMeUpdateTests(TestCase):
 
 class WebLoginEnvelopeTests(TestCase):
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username="login-user", password="LoginStrong!934",

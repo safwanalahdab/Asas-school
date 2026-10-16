@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from django.contrib.auth.models import Group, Permission
+from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -438,6 +439,10 @@ class PermissionManagementAuditTests(PermissionApiTestCase):
 
 class WebMePermissionTests(PermissionApiTestCase):
     url = "/api/v1/auth/web/me/"
+
+    def setUp(self):
+        cache.clear()
+        super().setUp()
 
     def test_normal_user_gets_direct_catalog_permissions_only(self):
         user = self.create_user("me-permission-user", User.Role.TEACHER)

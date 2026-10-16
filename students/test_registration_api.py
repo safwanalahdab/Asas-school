@@ -2,6 +2,7 @@ from copy import deepcopy
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import resolve
 from django.utils import timezone
@@ -27,6 +28,7 @@ class StudentRegistrationApiTests(TestCase):
     }
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
 
     def authenticate(self, role):

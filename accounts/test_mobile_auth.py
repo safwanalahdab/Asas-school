@@ -26,6 +26,7 @@ class MobileAuthTests(TestCase):
     change_password_url = "/api/v1/auth/mobile/change-password/"
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.password = "StrongPass!493"
         self.guardian = User.objects.create_user(

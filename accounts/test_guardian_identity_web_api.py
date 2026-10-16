@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -13,6 +14,7 @@ class GuardianIdentityWebApiTests(TestCase):
     users_url = "/api/v1/accounts/users/"
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.admin = User.objects.create_user(
             username="identity-admin",
