@@ -2,7 +2,9 @@ from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import transaction
+from contextlib import contextmanager
+
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 
 from rest_framework import serializers
@@ -97,6 +99,55 @@ class SupervisorScopeField(serializers.Field):
 
 REQUIRED = "هذا الحقل مطلوب."
 BLANK = "لا يجوز أن يكون هذا الحقل فارغاً."
+EMAIL_TAKEN = "البريد الإلكتروني مستخدم مسبقاً."
+
+# قيود قاعدة البيانات التي نحوّل خرقها إلى خطأ تحقق على حقل محدد.
+IDENTITY_CONSTRAINT_ERRORS = {
+    "unique_user_email_case_insensitive": ("email", EMAIL_TAKEN),
+}
+
+
+def ensure_email_available(email, *, exclude_pk=None):
+    """يرفض بريداً مستخدماً لحساب آخر بغض النظر عن حالة الأحرف."""
+    if not email:
+        return
+    duplicates = User.objects.filter(email__iexact=email)
+    if exclude_pk is not None:
+        duplicates = duplicates.exclude(pk=exclude_pk)
+    if duplicates.exists():
+        raise serializers.ValidationError(EMAIL_TAKEN)
+
+
+def _violated_constraint_name(exc):
+    # psycopg يحدد اسم القيد مباشرة؛ SQLite يذكره في نص الخطأ فقط.
+    diag = getattr(exc.__cause__, "diag", None)
+    constraint_name = getattr(diag, "constraint_name", None)
+    if constraint_name:
+        return constraint_name
+    message = str(exc)
+    for name in IDENTITY_CONSTRAINT_ERRORS:
+        if name in message:
+            return name
+    return None
+
+
+@contextmanager
+def translate_identity_integrity_errors():
+    """
+    يحمي من السباق بين فحص التكرار والحفظ.
+
+    يفتح savepoint حتى تبقى الـtransaction الخارجية صالحة، ويحوّل خرق
+    قيود الهوية فقط إلى ValidationError. أي IntegrityError آخر يُرفع كما هو.
+    """
+    try:
+        with transaction.atomic():
+            yield
+    except IntegrityError as exc:
+        target = IDENTITY_CONSTRAINT_ERRORS.get(_violated_constraint_name(exc))
+        if target is None:
+            raise
+        field, message = target
+        raise serializers.ValidationError({field: [message]}) from exc
 
 
 class UserSummarySerializer(serializers.ModelSerializer):
@@ -506,12 +557,17 @@ class UserCreateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelS
             )
         return attrs
 
+    def validate_email(self, value):
+        ensure_email_available(value)
+        return value
+
     def create(self, validated_data):
         supervisor_scope = validated_data.pop("supervisor_scope", None)
         with transaction.atomic():
             user = User(**validated_data)
             password = assign_temporary_password(user)
-            user.save()
+            with translate_identity_integrity_errors():
+                user.save()
             if supervisor_scope is not None:
                 set_supervisor_scope(
                     supervisor=user,
@@ -638,14 +694,12 @@ class WebMeUpdateSerializer(serializers.ModelSerializer):
         return attrs
 
     def validate_email(self, value):
-        if not value:
-            return value
-        duplicate_exists = User.objects.filter(email__iexact=value).exclude(
-            pk=self.instance.pk
-        ).exists()
-        if duplicate_exists:
-            raise serializers.ValidationError("البريد الإلكتروني مستخدم مسبقاً.")
+        ensure_email_available(value, exclude_pk=self.instance.pk)
         return value
+
+    def update(self, instance, validated_data):
+        with translate_identity_integrity_errors():
+            return super().update(instance, validated_data)
 
 
 class UserUpdateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelSerializer):
@@ -712,8 +766,16 @@ class UserUpdateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelS
             )
         return attrs
 
+    def validate_email(self, value):
+        ensure_email_available(value, exclude_pk=self.instance.pk)
+        return value
+
     @transaction.atomic
     def update(self, instance, validated_data):
+        with translate_identity_integrity_errors():
+            return self._update(instance, validated_data)
+
+    def _update(self, instance, validated_data):
         supervisor_scope = validated_data.pop("supervisor_scope", None)
         new_role = validated_data.pop("role", instance.role)
         actor = self.context["request"].user
