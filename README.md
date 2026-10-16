@@ -335,6 +335,9 @@ Apply database migrations once as a separate release operation:
 python manage.py migrate --noinput
 ```
 
+Set `DJANGO_SETTINGS_MODULE` (or pass `--settings`) before running it;
+otherwise `manage.py` uses the development settings `config.settings`.
+
 Do not place migrations in the Gunicorn start command. Keeping migrations in a
 separate release phase prevents multiple application processes or restarts from
 attempting schema changes concurrently.
@@ -346,6 +349,10 @@ Start the WSGI application with:
 ```bash
 gunicorn config.wsgi:application
 ```
+
+`DJANGO_SETTINGS_MODULE` must be set (`config.production_settings` in
+production); `config.wsgi` and `config.asgi` refuse to start without it instead
+of falling back to the development settings.
 
 Worker counts, threads, timeouts, and other resource-dependent tuning should be
 selected only after the final hosting platform and resource limits are known.

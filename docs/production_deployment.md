@@ -275,9 +275,15 @@ Known limitations:
 
 ## 7. Gunicorn and systemd
 
-The real WSGI target is `config.wsgi:application`. The WSGI module uses
-`setdefault`, so the production value from the systemd environment takes
-precedence.
+The real WSGI target is `config.wsgi:application`. `DJANGO_SETTINGS_MODULE` is
+**mandatory** for every Gunicorn or ASGI start: `config.wsgi` and
+`config.asgi` have no default and refuse to start (`ImproperlyConfigured`)
+when it is missing or empty, instead of silently loading the development
+settings. The unit below reads it from `/etc/asas/backend.env`, which must
+contain `DJANGO_SETTINGS_MODULE=config.production_settings` (section 4);
+without it `asas-backend` fails to start. `manage.py` still defaults to
+`config.settings`, which is why every production management command passes
+`--settings=config.production_settings`.
 
 Create `/etc/systemd/system/asas-backend.service`:
 
@@ -326,6 +332,61 @@ sudo systemctl restart asas-backend
 sudo systemctl status asas-backend
 sudo journalctl -u asas-backend -f
 ```
+
+### Expired JWT token cleanup
+
+Every token refresh rotates the refresh token: SimpleJWT stores the new token
+in `token_blacklist_outstandingtoken` and blacklists the old one in
+`token_blacklist_blacklistedtoken`, so each refresh adds two rows and neither
+table shrinks on its own. SimpleJWT's built-in `flushexpiredtokens` command
+deletes outstanding tokens whose expiry (`REFRESH_TOKEN_LIFETIME`, currently 7
+days) has passed, together with their blacklist rows. An expired refresh token
+is rejected anyway, so the cleanup signs nobody out.
+
+Create `/etc/systemd/system/asas-token-cleanup.service`:
+
+```ini
+[Unit]
+Description=Asas expired JWT token cleanup
+After=network.target postgresql.service
+Wants=postgresql.service
+OnFailure=<OPERATOR_ALERT_UNIT>
+
+[Service]
+Type=oneshot
+User=asas
+Group=asas
+WorkingDirectory=/var/www/asas/backend
+EnvironmentFile=/etc/asas/backend.env
+UMask=0027
+ExecStart=/var/www/asas/venv/bin/python /var/www/asas/backend/manage.py flushexpiredtokens --settings=config.production_settings
+```
+
+`/etc/systemd/system/asas-token-cleanup.timer`:
+
+```ini
+[Unit]
+Description=Run the Asas expired JWT token cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now asas-token-cleanup.timer
+sudo systemctl list-timers asas-token-cleanup.timer
+sudo journalctl -u asas-token-cleanup --since "2 days ago"
+```
+
+The command prints nothing on success; the journal shows the run finishing
+with `status=0/SUCCESS`. Replace `<OPERATOR_ALERT_UNIT>` as for the push queue
+check (section 14), or remove that line. `Persistent=true` runs a missed
+cleanup at the next boot.
 
 ## 8. Push notification worker
 
@@ -666,6 +727,18 @@ whose publish date is today or earlier as already notified, so enabling the
 timer sends nothing for old announcements; only future-dated ones are notified
 on their date.
 
+Before deploying the first release in which `DJANGO_SETTINGS_MODULE` is
+mandatory (section 7), confirm the environment file sets it, or
+`asas-backend` refuses to start after the restart:
+
+```bash
+sudo grep -x 'DJANGO_SETTINGS_MODULE=config.production_settings' /etc/asas/backend.env
+```
+
+It must print that exact line; no output means it is missing or different.
+On the same release, install the `asas-token-cleanup` units (section 7) and
+run `sudo systemctl enable --now asas-token-cleanup.timer`.
+
 For routine releases, use a reviewed immutable commit or release directory
 rather than an unreviewed working tree. Take the database backup before
 migrations. Keep the previous commit/release available until smoke tests pass.
@@ -731,6 +804,9 @@ Monitor at minimum:
   notified.** Any `ERROR` line from `announcements` in its journal needs
   attention; the failed announcement is retried every 5 minutes until it
   succeeds.
+- Expired JWT token cleanup: `asas-token-cleanup.timer` must be active
+  (`systemctl list-timers`) and its last run successful. If it stops, the
+  token tables grow with every refresh; nobody is signed out.
 - HTTP 429 rate and unexpected login-throttle changes.
 - TLS expiry and Certbot renewal status.
 - `/health/` status and latency.
@@ -785,6 +861,7 @@ so it scans the notifications table once a minute.
 sudo journalctl -u asas-backend --since "1 hour ago"
 sudo journalctl -u asas-push-worker --since "1 hour ago"
 sudo journalctl -u asas-announcement-notify --since today
+sudo journalctl -u asas-token-cleanup --since "2 days ago"
 sudo -u asas sh -c 'set -a; . /etc/asas/backend.env; set +a; /var/www/asas/venv/bin/python /var/www/asas/backend/manage.py push_queue_status --settings=config.production_settings'
 sudo systemctl status asas-backend asas-push-worker nginx postgresql
 sudo tail -f /var/log/nginx/asas_error.log
@@ -848,6 +925,9 @@ retain the previous environment-compatible artifact. If rollback is required:
 
 Rollback is a release-specific decision; code rollback and database rollback
 are not automatically equivalent.
+
+`asas-token-cleanup.timer` needs no action on rollback: `flushexpiredtokens`
+comes from SimpleJWT, not from this project, so every release has it.
 
 ### Rolling back to a release without the push worker
 
