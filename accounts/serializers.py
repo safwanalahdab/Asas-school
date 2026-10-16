@@ -100,22 +100,50 @@ class SupervisorScopeField(serializers.Field):
 REQUIRED = "هذا الحقل مطلوب."
 BLANK = "لا يجوز أن يكون هذا الحقل فارغاً."
 EMAIL_TAKEN = "البريد الإلكتروني مستخدم مسبقاً."
+EMAIL_MATCHES_USERNAME = "البريد الإلكتروني مطابق لاسم مستخدم حساب آخر."
+USERNAME_TAKEN = "اسم المستخدم مستخدم مسبقاً."
+USERNAME_MATCHES_EMAIL = "اسم المستخدم مطابق للبريد الإلكتروني لحساب آخر."
 
 # قيود قاعدة البيانات التي نحوّل خرقها إلى خطأ تحقق على حقل محدد.
 IDENTITY_CONSTRAINT_ERRORS = {
     "unique_user_email_case_insensitive": ("email", EMAIL_TAKEN),
+    "unique_user_username_case_insensitive": ("username", USERNAME_TAKEN),
 }
 
 
+def _other_accounts(exclude_pk):
+    accounts = User.objects.all()
+    if exclude_pk is not None:
+        accounts = accounts.exclude(pk=exclude_pk)
+    return accounts
+
+
 def ensure_email_available(email, *, exclude_pk=None):
-    """يرفض بريداً مستخدماً لحساب آخر بغض النظر عن حالة الأحرف."""
+    """
+    يرفض بريداً مستخدماً لحساب آخر، أو مطابقاً لاسم مستخدم حساب آخر،
+    بغض النظر عن حالة الأحرف، لأن تسجيل الدخول يقبل أياً منهما.
+    """
     if not email:
         return
-    duplicates = User.objects.filter(email__iexact=email)
-    if exclude_pk is not None:
-        duplicates = duplicates.exclude(pk=exclude_pk)
-    if duplicates.exists():
+    accounts = _other_accounts(exclude_pk)
+    if accounts.filter(email__iexact=email).exists():
         raise serializers.ValidationError(EMAIL_TAKEN)
+    if accounts.filter(username__iexact=email).exists():
+        raise serializers.ValidationError(EMAIL_MATCHES_USERNAME)
+
+
+def ensure_username_available(username, *, exclude_pk=None):
+    """
+    يرفض اسم مستخدم موجوداً لحساب آخر، أو مطابقاً لبريد حساب آخر،
+    بغض النظر عن حالة الأحرف. الاسم يُحفظ كما أُدخل.
+    """
+    if not username:
+        return
+    accounts = _other_accounts(exclude_pk)
+    if accounts.filter(username__iexact=username).exists():
+        raise serializers.ValidationError(USERNAME_TAKEN)
+    if accounts.filter(email__iexact=username).exists():
+        raise serializers.ValidationError(USERNAME_MATCHES_EMAIL)
 
 
 def _violated_constraint_name(exc):
@@ -524,7 +552,7 @@ class UserCreateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelS
         ]
         read_only_fields = ["id", "temporary_password"]
         extra_kwargs = {
-            "username": {"error_messages": {"required": REQUIRED, "blank": BLANK, "unique": "اسم المستخدم مستخدم مسبقاً."}},
+            "username": {"error_messages": {"required": REQUIRED, "blank": BLANK, "unique": USERNAME_TAKEN}},
             "email": {"error_messages": {"invalid": "أدخل بريداً إلكترونياً صحيحاً."}},
             "first_name": {"error_messages": {"blank": BLANK}},
             "last_name": {"error_messages": {"blank": BLANK}},
@@ -556,6 +584,10 @@ class UserCreateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelS
                 {"supervisor_scope": "هذا الحقل مسموح فقط لدور الموجّه."}
             )
         return attrs
+
+    def validate_username(self, value):
+        ensure_username_available(value)
+        return value
 
     def validate_email(self, value):
         ensure_email_available(value)
@@ -765,6 +797,10 @@ class UserUpdateSerializer(OptionalNationalIdSerializerMixin, serializers.ModelS
                 {"supervisor_scope": "هذا الحقل مسموح فقط لدور الموجّه."}
             )
         return attrs
+
+    def validate_username(self, value):
+        ensure_username_available(value, exclude_pk=self.instance.pk)
+        return value
 
     def validate_email(self, value):
         ensure_email_available(value, exclude_pk=self.instance.pk)

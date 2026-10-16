@@ -134,6 +134,10 @@ class User(AbstractUser):
                 ),
                 name="unique_user_email_case_insensitive",
             ),
+            models.UniqueConstraint(
+                Lower("username"),
+                name="unique_user_username_case_insensitive",
+            ),
         ]
 
     def __str__(self):
