@@ -2,6 +2,7 @@ from django.urls import path
 
 from accounts.mobile_views import (
     MobileChangePasswordView,
+    MobileDeleteAccountView,
     MobileLoginView,
     MobileLogoutView,
     MobileMeView,
@@ -16,4 +17,5 @@ urlpatterns = [
     path("logout/", MobileLogoutView.as_view(), name="logout"),
     path("me/", MobileMeView.as_view(), name="me"),
     path("change-password/", MobileChangePasswordView.as_view(), name="change-password"),
+    path("delete-account/", MobileDeleteAccountView.as_view(), name="delete-account"),
 ]

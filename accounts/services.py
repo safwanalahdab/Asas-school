@@ -1,4 +1,5 @@
 import secrets
+import uuid
 from datetime import timedelta
 
 from django.contrib.auth.models import Permission
@@ -350,3 +351,98 @@ def reset_account_password(user, *, actor=None):
             target=locked_user, metadata={},
         )
     return locked_user, password
+
+
+@transaction.atomic
+def delete_guardian_account(user, *, request=None):
+    """
+    Close a guardian's account at their own request.
+
+    The row is kept because school records point to it with PROTECT. The
+    account is deactivated, signed out everywhere and stripped of personal
+    data; student records are left untouched. This cannot be undone.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken,
+        OutstandingToken,
+    )
+
+    from audit_logs.services import get_request_ip
+    from notifications.models import Notification, PushDevice
+    from students.models import GuardianStudent, StudentImportRow
+
+    User = get_user_model()
+    locked = User.objects.select_for_update().get(pk=user.pk)
+    if locked.role != User.Role.GUARDIAN:
+        raise ValueError("Only guardian accounts can be deleted this way.")
+
+    increment_token_version(locked)
+    BlacklistedToken.objects.bulk_create(
+        [
+            BlacklistedToken(token=token)
+            for token in OutstandingToken.objects.filter(
+                user=locked, blacklistedtoken__isnull=True
+            )
+        ],
+        ignore_conflicts=True,
+    )
+
+    locked.is_active = False
+    locked.set_unusable_password()
+    locked.username = f"deleted-{uuid.uuid4()}"
+    locked.first_name = ""
+    locked.last_name = ""
+    locked.email = None
+    locked.phone_number = ""
+    locked.national_id = None
+    locked.must_change_password = False
+    locked.temporary_password_expires_at = None
+    locked.save(
+        update_fields=[
+            "is_active",
+            "password",
+            "username",
+            "first_name",
+            "last_name",
+            "email",
+            "phone_number",
+            "national_id",
+            "must_change_password",
+            "temporary_password_expires_at",
+        ]
+    )
+    locked.user_permissions.clear()
+    locked.groups.clear()
+
+    PushDevice.objects.filter(user=locked).delete()
+    Notification.objects.filter(recipient=locked).delete()
+    GuardianStudent.objects.filter(guardian=locked, is_active=True).update(
+        is_active=False,
+        updated_at=timezone.now(),
+    )
+    # Import rows keep the guardian's national id, name and phone in their
+    # normalized copy of the spreadsheet; the row itself stays for the school.
+    import_rows = StudentImportRow.objects.select_for_update().filter(
+        guardian=locked,
+        normalized_data__has_key="guardian",
+    )
+    for row in import_rows:
+        row.normalized_data = {
+            key: value
+            for key, value in row.normalized_data.items()
+            if key != "guardian"
+        }
+        row.save(update_fields=["normalized_data", "updated_at"])
+
+    # Recorded after anonymization so the entry carries the id only.
+    record_audit_event(
+        actor=locked,
+        module=AuditLog.Module.ACCOUNTS,
+        action=AuditLog.Action.DELETE,
+        message="حذف ولي أمر حسابه من تطبيق الموبايل.",
+        target_type=locked._meta.label,
+        target_id=locked.pk,
+        target_display=str(locked.pk),
+        ip_address=get_request_ip(request),
+    )
+    return locked

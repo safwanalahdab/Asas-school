@@ -354,6 +354,7 @@ REST_FRAMEWORK = {
         "mobile_school_request_hourly": "5/hour",
         "mobile_device_registration": "10/minute",
         "mobile_device_unregistration": "10/minute",
+        "mobile_account_deletion": "5/hour",
     },
 }
 

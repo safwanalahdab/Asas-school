@@ -8,7 +8,10 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken, UntypedToken
 
-from accounts.services import temporary_password_is_expired
+from accounts.services import (
+    delete_guardian_account,
+    temporary_password_is_expired,
+)
 
 User = get_user_model()
 DUMMY_PASSWORD_HASH = make_password("mobile-login-dummy-password")
@@ -142,6 +145,26 @@ class MobileLogoutSerializer(serializers.Serializer):
             pass
 
 
+class MobileDeleteAccountSerializer(serializers.Serializer):
+    password = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+        error_messages={
+            "required": "هذا الحقل مطلوب.",
+            "blank": "لا يجوز أن يكون هذا الحقل فارغاً.",
+        },
+    )
+
+    def validate_password(self, value):
+        if not self.context["request"].user.check_password(value):
+            raise serializers.ValidationError("كلمة المرور الحالية غير صحيحة.")
+        return value
+
+    def save(self, **kwargs):
+        request = self.context["request"]
+        return delete_guardian_account(request.user, request=request)
+
+
 class MobileTokenPairSerializer(serializers.Serializer):
     access = serializers.CharField()
     refresh = serializers.CharField()
@@ -184,4 +207,9 @@ class MobileMeResponseSerializer(MobileSuccessEnvelopeSerializer):
 
 class MobileChangePasswordResponseSerializer(MobileSuccessEnvelopeSerializer):
     code = serializers.CharField(default="MOBILE_PASSWORD_CHANGED")
+    data = serializers.JSONField(default=dict)
+
+
+class MobileDeleteAccountResponseSerializer(MobileSuccessEnvelopeSerializer):
+    code = serializers.CharField(default="ACCOUNT_DELETED")
     data = serializers.JSONField(default=dict)

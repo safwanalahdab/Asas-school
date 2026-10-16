@@ -1,4 +1,4 @@
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 
 class WebLoginRateThrottle(AnonRateThrottle):
@@ -14,3 +14,8 @@ class MobileLoginRateThrottle(AnonRateThrottle):
 
     scope = "mobile_login"
 
+
+class MobileAccountDeletionThrottle(UserRateThrottle):
+    """Limit password guesses through the Guardian account deletion endpoint."""
+
+    scope = "mobile_account_deletion"

@@ -9,6 +9,8 @@ from accounts.mobile_permissions import IsMobileGuardian
 from accounts.mobile_serializers import (
     MobileGuardianSerializer,
     MobileChangePasswordResponseSerializer,
+    MobileDeleteAccountResponseSerializer,
+    MobileDeleteAccountSerializer,
     MobileLoginResponseSerializer,
     MobileLoginSerializer,
     MobileLogoutSerializer,
@@ -18,7 +20,10 @@ from accounts.mobile_serializers import (
     MobileTokenRefreshSerializer,
 )
 from accounts.serializers import ChangePasswordSerializer
-from accounts.throttles import MobileLoginRateThrottle
+from accounts.throttles import (
+    MobileAccountDeletionThrottle,
+    MobileLoginRateThrottle,
+)
 from config.api_responses import ArabicApiResponseMixin
 
 
@@ -99,4 +104,31 @@ class MobileChangePasswordView(ArabicApiResponseMixin, APIView):
         return Response({
             "code": "MOBILE_PASSWORD_CHANGED",
             "detail": "تم تغيير كلمة المرور بنجاح. يرجى تسجيل الدخول من جديد.",
+        }, status=status.HTTP_200_OK)
+
+
+class MobileDeleteAccountView(ArabicApiResponseMixin, APIView):
+    authentication_classes = [MobileJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsMobileGuardian]
+    throttle_classes = [MobileAccountDeletionThrottle]
+    # Stores require deletion to be easy, so a forced password change must not block it.
+    allow_password_change_required = True
+
+    @extend_schema(
+        request=MobileDeleteAccountSerializer,
+        responses={200: MobileDeleteAccountResponseSerializer},
+        description=(
+            "يحذف حساب ولي الأمر نهائياً: يعطّل الحساب ويسجّل خروجه من كل "
+            "الأجهزة ويمسح بياناته الشخصية. لا يمكن التراجع عن العملية."
+        ),
+    )
+    def post(self, request):
+        serializer = MobileDeleteAccountSerializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({
+            "code": "ACCOUNT_DELETED",
+            "detail": "تم حذف الحساب بنجاح.",
         }, status=status.HTTP_200_OK)
