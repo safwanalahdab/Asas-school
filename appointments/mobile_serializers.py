@@ -6,6 +6,9 @@ from rest_framework import serializers
 from .models import AppointmentRequest
 
 
+REQUEST_REASON_MAX_LENGTH = 1000
+
+
 class MobileAppointmentRequestSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
         source="get_status_display",
@@ -85,5 +88,9 @@ class MobileAppointmentRequestSerializer(serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError(
                 "يجب إدخال سبب طلب الحضور."
+            )
+        if len(value) > REQUEST_REASON_MAX_LENGTH:
+            raise serializers.ValidationError(
+                f"يجب ألا يتجاوز سبب طلب الحضور {REQUEST_REASON_MAX_LENGTH} حرف."
             )
         return value

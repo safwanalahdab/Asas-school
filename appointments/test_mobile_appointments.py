@@ -2,11 +2,16 @@ from datetime import datetime, time, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from school_requests.models import SchoolRequest
+
+from .mobile_serializers import REQUEST_REASON_MAX_LENGTH
+from .mobile_throttles import MobileAppointmentRequestBurstThrottle
 from .models import AppointmentRequest
 
 
@@ -15,14 +20,19 @@ User = get_user_model()
 
 class MobileAppointmentRequestTests(TestCase):
     list_url = "/api/v1/mobile/appointments/"
+    school_requests_url = "/api/v1/mobile/requests/"
 
     def setUp(self):
+        cache.clear()
         self.client = APIClient()
         self.guardian = self.make_user("mobile-appointment-guardian", User.Role.GUARDIAN)
         self.other_guardian = self.make_user(
             "mobile-appointment-other", User.Role.GUARDIAN
         )
         self.admin = self.make_user("mobile-appointment-admin", User.Role.SCHOOL_ADMIN)
+
+    def tearDown(self):
+        cache.clear()
 
     def make_user(self, username, role):
         return User.objects.create_user(
@@ -51,6 +61,27 @@ class MobileAppointmentRequestTests(TestCase):
 
     def detail_url(self, appointment):
         return f"{self.list_url}{appointment.id}/"
+
+    def post_appointment(self, api_client=None, reason="Appointment reason"):
+        return (api_client or self.client).post(
+            self.list_url,
+            {
+                "requested_date": str(timezone.localdate() + timedelta(days=1)),
+                "requested_time": "10:30",
+                "request_reason": reason,
+            },
+            format="json",
+        )
+
+    def post_school_request(self, details="School request"):
+        return self.client.post(
+            self.school_requests_url,
+            {
+                "request_type": SchoolRequest.RequestType.SUGGESTION,
+                "details": details,
+            },
+            format="json",
+        )
 
     def items(self, response):
         data = response.data["data"]
@@ -128,6 +159,8 @@ class MobileAppointmentRequestTests(TestCase):
             ({"requested_date": valid_date, "requested_time": "10:30", "request_reason": "   "}, "request_reason"),
         )
         for body, field in cases:
+            # كل POST يُحسب من حد الطلبات، حتى المرفوض بـ400.
+            cache.clear()
             response = self.client.post(self.list_url, body, format="json")
             self.assertEqual(response.status_code, 400)
             self.assertIn(field, response.data["errors"])
@@ -144,6 +177,7 @@ class MobileAppointmentRequestTests(TestCase):
             )
             for requested_date, requested_time, expected in cases:
                 with self.subTest(date=requested_date, time=requested_time):
+                    cache.clear()
                     response = self.client.post(
                         self.list_url,
                         {
@@ -375,3 +409,101 @@ class MobileAppointmentRequestTests(TestCase):
                 f"{self.detail_url(appointment)}{action}/", {}, format="json"
             )
             self.assertIn(response.status_code, (404, 405))
+
+    def test_reason_length_is_limited_after_strip(self):
+        self.authenticate()
+        accepted = self.post_appointment(
+            reason="  " + "a" * REQUEST_REASON_MAX_LENGTH + "  "
+        )
+        self.assertEqual(accepted.status_code, 201, accepted.data)
+        self.assertEqual(
+            len(AppointmentRequest.objects.get().request_reason),
+            REQUEST_REASON_MAX_LENGTH,
+        )
+
+        rejected = self.post_appointment(
+            reason="a" * (REQUEST_REASON_MAX_LENGTH + 1)
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("request_reason", rejected.data["errors"])
+        self.assertEqual(AppointmentRequest.objects.count(), 1)
+
+    def test_burst_throttle_blocks_fourth_post_but_not_list_or_retrieve(self):
+        appointment = self.create_appointment()
+        self.authenticate()
+        statuses = [
+            self.post_appointment(reason=f"Burst {index}").status_code
+            for index in range(4)
+        ]
+        self.assertEqual(statuses, [201, 201, 201, 429])
+        self.assertEqual(
+            AppointmentRequest.objects.filter(guardian=self.guardian).count(),
+            4,
+        )
+        self.assertFalse(
+            AppointmentRequest.objects.filter(request_reason="Burst 3").exists()
+        )
+        self.assertEqual(self.client.get(self.list_url).status_code, 200)
+        self.assertEqual(
+            self.client.get(self.detail_url(appointment)).status_code,
+            200,
+        )
+
+    def test_throttled_response_uses_unified_error_envelope(self):
+        self.authenticate()
+        for index in range(3):
+            self.post_appointment(reason=f"Envelope {index}")
+        response = self.post_appointment(reason="Envelope blocked")
+        self.assertEqual(response.status_code, 429)
+        self.assertIs(response.data["success"], False)
+        self.assertEqual(response.data["code"], "TOO_MANY_REQUESTS")
+
+    def test_hourly_throttle_blocks_sixth_post_deterministically(self):
+        self.authenticate()
+        with patch.object(
+            MobileAppointmentRequestBurstThrottle,
+            "get_rate",
+            return_value="100/minute",
+        ):
+            statuses = [
+                self.post_appointment(reason=f"Hourly {index}").status_code
+                for index in range(6)
+            ]
+        self.assertEqual(statuses, [201, 201, 201, 201, 201, 429])
+        self.assertEqual(AppointmentRequest.objects.count(), 5)
+
+    def test_appointment_throttle_does_not_consume_school_request_quota(self):
+        self.authenticate()
+        for index in range(3):
+            self.assertEqual(
+                self.post_appointment(reason=f"Quota {index}").status_code,
+                201,
+            )
+        self.assertEqual(self.post_appointment().status_code, 429)
+        self.assertEqual(self.post_school_request().status_code, 201)
+
+    def test_school_request_throttle_does_not_consume_appointment_quota(self):
+        self.authenticate()
+        for index in range(3):
+            self.assertEqual(
+                self.post_school_request(f"Quota {index}").status_code,
+                201,
+            )
+        self.assertEqual(self.post_school_request().status_code, 429)
+        self.assertEqual(self.post_appointment().status_code, 201)
+
+    def test_throttling_is_guardian_scoped(self):
+        self.authenticate()
+        for index in range(3):
+            self.assertEqual(
+                self.post_appointment(reason=f"Guardian A {index}").status_code,
+                201,
+            )
+        self.assertEqual(self.post_appointment().status_code, 429)
+
+        other_client = APIClient()
+        self.authenticate(user=self.other_guardian, api_client=other_client)
+        self.assertEqual(
+            self.post_appointment(api_client=other_client).status_code,
+            201,
+        )

@@ -40,7 +40,7 @@ PRODUCTION_DATABASE_CACHES = {
         "TIMEOUT": 300,
         "KEY_PREFIX": "asas",
         "OPTIONS": {
-            "MAX_ENTRIES": 300,
+            "MAX_ENTRIES": 5000,
             "CULL_FREQUENCY": 3,
         },
     },

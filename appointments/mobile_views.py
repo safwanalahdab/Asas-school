@@ -9,6 +9,10 @@ from config.api_responses import ArabicApiResponseMixin
 
 from .mobile_filters import MobileAppointmentRequestFilter
 from .mobile_serializers import MobileAppointmentRequestSerializer
+from .mobile_throttles import (
+    MobileAppointmentRequestBurstThrottle,
+    MobileAppointmentRequestHourlyThrottle,
+)
 from .models import AppointmentRequest
 
 
@@ -53,6 +57,14 @@ class MobileAppointmentRequestViewSet(
         return AppointmentRequest.objects.filter(
             guardian=self.request.user
         ).order_by("-created_at", "-id")
+
+    def get_throttles(self):
+        if self.action == "create":
+            return [
+                MobileAppointmentRequestBurstThrottle(),
+                MobileAppointmentRequestHourlyThrottle(),
+            ]
+        return []
 
     def perform_create(self, serializer):
         serializer.save(

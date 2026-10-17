@@ -51,6 +51,7 @@ MANAGED_ENVIRONMENT_VARIABLES = {
     "CSRF_COOKIE_SAMESITE",
     "MEDIA_ROOT",
     "MEDIA_URL",
+    "ADMIN_URL_PATH",
 }
 
 # قيم اختبارية وهمية فقط.
@@ -71,6 +72,7 @@ VALID_PRODUCTION_ENVIRONMENT = {
     "DB_PORT": "5432",
     "DB_SSLMODE": "disable",
     "MEDIA_ROOT": "/srv/test-media",
+    "ADMIN_URL_PATH": "manage-x7k2/",
 }
 
 DEVELOPMENT_ENVIRONMENT = {
@@ -142,6 +144,7 @@ INSPECTED_SETTINGS = [
     "SPECTACULAR_SETTINGS",
     "CACHES",
     "REST_FRAMEWORK",
+    "ADMIN_URL_PATH",
 ]
 
 # يعطّل قراءة ملف .env المحلي ثم يستورد وحدة الإعدادات ويطبع ملخصًا JSON
@@ -387,7 +390,7 @@ class ProductionSettingsValidConfigurationTests(
                 "TIMEOUT": 300,
                 "KEY_PREFIX": "asas",
                 "OPTIONS": {
-                    "MAX_ENTRIES": 300,
+                    "MAX_ENTRIES": 5000,
                     "CULL_FREQUENCY": 3,
                 },
             },
@@ -425,6 +428,8 @@ class ProductionSettingsValidConfigurationTests(
                 "mobile_login": "5/minute",
                 "mobile_school_request_burst": "3/minute",
                 "mobile_school_request_hourly": "5/hour",
+                "mobile_appointment_request_burst": "3/minute",
+                "mobile_appointment_request_hourly": "5/hour",
                 "mobile_device_registration": "10/minute",
                 "mobile_device_unregistration": "10/minute",
                 "mobile_account_deletion": "5/hour",
@@ -565,6 +570,7 @@ class ProductionSettingsValidationTests(
             "DB_PORT",
             "DB_SSLMODE",
             "MEDIA_ROOT",
+            "ADMIN_URL_PATH",
         ):
             for value in (None, ""):
                 with self.subTest(name=name, value=value):
@@ -583,6 +589,34 @@ class ProductionSettingsValidationTests(
         for value in ("media", "./media", "var/www/asas/media", "/srv/../etc", "/"):
             with self.subTest(value=value):
                 self.assert_rejected("MEDIA_ROOT", MEDIA_ROOT=value)
+
+    def test_admin_url_path_is_read_from_environment(self):
+        for value in ("manage-x7k2/", "api-panel/", "Panel_9/"):
+            with self.subTest(value=value):
+                settings = self.assert_loads(ADMIN_URL_PATH=value)
+                self.assertEqual(settings["ADMIN_URL_PATH"], value)
+
+    def test_default_admin_url_path_is_rejected(self):
+        for value in ("admin/", "Admin/", "ADMIN/"):
+            with self.subTest(value=value):
+                self.assert_rejected("ADMIN_URL_PATH", ADMIN_URL_PATH=value)
+
+    def test_invalid_admin_url_paths_are_rejected(self):
+        for value in (
+            "/x/",
+            "x",
+            "a/b/",
+            "api/x/",
+            "api/",
+            "Health/",
+            "static/",
+            "media/",
+            "إدارة/",
+            "my panel/",
+            "panel.x/",
+        ):
+            with self.subTest(value=value):
+                self.assert_rejected("ADMIN_URL_PATH", ADMIN_URL_PATH=value)
 
     def test_media_url_stays_fixed(self):
         settings = self.assert_loads(MEDIA_URL="/uploads/")
@@ -765,6 +799,7 @@ class BaseSettingsUnchangedTests(SimpleTestCase):
         self.assertIs(settings["SECURE_SSL_REDIRECT"], False)
         self.assertIs(settings["JWT_COOKIE_SECURE"], False)
         self.assertEqual(settings["JWT_COOKIE_SAMESITE"], "Lax")
+        self.assertEqual(settings["ADMIN_URL_PATH"], "admin/")
         self.assertNotIn("STORAGES", settings)
         self.assertEqual(settings["MEDIA_ROOT"], str(BASE_DIR / "media"))
         self.assertEqual(settings["MEDIA_URL"], "/media/")

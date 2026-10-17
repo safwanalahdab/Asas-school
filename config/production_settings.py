@@ -293,6 +293,7 @@ from config.settings import (  # noqa: E402
     env,
     normalize_origins,
     read_samesite_setting,
+    validate_admin_url_path,
 )
 
 
@@ -336,6 +337,14 @@ SIMPLE_JWT = {
 
 ALLOWED_HOSTS = read_production_hosts("ALLOWED_HOSTS")
 
+# رابط Django Admin إلزامي ومختلف عن "admin/" حتى لا تجده البوتات تلقائيًا.
+ADMIN_URL_PATH = validate_admin_url_path(require_setting("ADMIN_URL_PATH"))
+if ADMIN_URL_PATH.lower() == "admin/":
+    raise ImproperlyConfigured(
+        "ADMIN_URL_PATH cannot be 'admin/' in production. "
+        "Use a random, hard-to-guess path."
+    )
+
 
 # =========================================================
 # Shared cache and client IP handling
@@ -350,7 +359,7 @@ CACHES = {
         "TIMEOUT": 300,
         "KEY_PREFIX": "asas",
         "OPTIONS": {
-            "MAX_ENTRIES": 300,
+            "MAX_ENTRIES": 5000,
             "CULL_FREQUENCY": 3,
         },
     },

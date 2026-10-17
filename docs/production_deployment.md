@@ -124,7 +124,14 @@ DB_PORT=5432
 DB_SSLMODE=<disable_or_prefer_for_reviewed_local_connection>
 
 MEDIA_ROOT=/var/www/asas/media
+
+ADMIN_URL_PATH=<RANDOM_ADMIN_PATH>/
 ```
+
+`ADMIN_URL_PATH` is the Django Admin URL prefix: one segment of English
+letters, digits, `-` or `_`, ending with `/` (for example `manage-x7k2/`).
+Use a random, hard-to-guess value. `admin/` (in any letter case) and the
+project paths `api/`, `health/`, `static/` and `media/` are rejected.
 
 Production rejects `DEBUG=True`; leave `DEBUG` unset or set it to `False`.
 Hosts must be plain hostnames. Origins must be exact HTTPS origins without a
@@ -226,7 +233,7 @@ CACHES = {
         "LOCATION": "asas_cache",
         "TIMEOUT": 300,
         "KEY_PREFIX": "asas",
-        "OPTIONS": {"MAX_ENTRIES": 300, "CULL_FREQUENCY": 3},
+        "OPTIONS": {"MAX_ENTRIES": 5000, "CULL_FREQUENCY": 3},
     },
 }
 ```
@@ -277,7 +284,7 @@ Known limitations:
   guarantee under concurrent requests. This was also true with the previous
   cache backend.
 - Expired entries are deleted only opportunistically: Django culls when an
-  entry is written and the table holds more than `MAX_ENTRIES` (300) rows,
+  entry is written and the table holds more than `MAX_ENTRIES` (5000) rows,
   removing roughly one third (`CULL_FREQUENCY=3`). Monitor the row count and
   table size of `asas_cache` (see Monitoring). `createcachetable` cannot be
   used to clean it.
@@ -512,12 +519,12 @@ them. Both must run.
   (title, content, or targets, including adding sections) creates no new
   notifications.
 
-> **Warning: Django Admin.** Announcements created in `/admin/` do not notify
-> on save, but this command notifies them: any announcement created from
-> `/admin/` in production whose publish date has arrived (including a past
+> **Warning: Django Admin.** Announcements created in Django Admin do not
+> notify on save, but this command notifies them: any announcement created from
+> Django Admin in production whose publish date has arrived (including a past
 > date) and that has not expired reaches the targeted guardians on the next
 > run after `ANNOUNCEMENT_NOTIFY_HOUR`. **Never create test announcements from
-> `/admin/` in production.**
+> Django Admin in production.**
 
 Create `/etc/systemd/system/asas-announcement-notify.service`:
 
@@ -749,6 +756,16 @@ sudo grep -x 'DJANGO_SETTINGS_MODULE=config.production_settings' /etc/asas/backe
 It must print that exact line; no output means it is missing or different.
 On the same release, install the `asas-token-cleanup` units (section 7) and
 run `sudo systemctl enable --now asas-token-cleanup.timer`.
+
+Before deploying the first release in which `ADMIN_URL_PATH` is mandatory
+(section 4), confirm the environment file sets it, or `asas-backend` refuses
+to start after the restart:
+
+```bash
+sudo grep '^ADMIN_URL_PATH=' /etc/asas/backend.env
+```
+
+It must print one line with a value other than `admin/`.
 
 For routine releases, use a reviewed immutable commit or release directory
 rather than an unreviewed working tree. Take the database backup before

@@ -60,13 +60,6 @@ The backend is built using:
 * Pillow
 * Gunicorn
 
-Temporary testing services currently include:
-
-* Render for backend hosting
-* Neon PostgreSQL for the testing database
-
-These services are not the selected final paid production infrastructure.
-
 ---
 
 ## Project Structure
@@ -286,19 +279,19 @@ Manual API testing can additionally be performed using Swagger UI or Postman.
 
 # Production Deployment
 
-The current Render backend and Neon database are temporary testing infrastructure.
-The final paid hosting provider, domain, proxy topology, and managed services have
-not yet been selected. The following process is intentionally provider-neutral.
+Production runs on a manually managed Ubuntu server with Nginx, Gunicorn,
+systemd, and PostgreSQL. `docs/production_deployment.md` is the single reference
+for deploying and operating it.
 
-Production configuration must be supplied through environment variables in the
-selected hosting environment. Use `.env.example` as the configuration reference
-and never commit real secrets. At minimum, confirm correct values for:
+Production configuration must be supplied through environment variables on the
+server. Use `.env.production.example` as the configuration reference and never
+commit real secrets. At minimum, confirm correct values for:
 
 * `SECRET_KEY`, `DEBUG`, and `ALLOWED_HOSTS`
 * PostgreSQL `DB_*` variables
 * `JWT_SIGNING_KEY`
 * Frontend and backend origins
-* JWT cookie and CSRF security values as applicable to the final topology
+* JWT cookie and CSRF security values
 * `LOG_LEVEL`
 * Firebase configuration when push notifications are enabled
 * The production security flags prepared in the settings foundation
@@ -354,8 +347,8 @@ gunicorn config.wsgi:application
 production); `config.wsgi` and `config.asgi` refuse to start without it instead
 of falling back to the development settings.
 
-Worker counts, threads, timeouts, and other resource-dependent tuning should be
-selected only after the final hosting platform and resource limits are known.
+Gunicorn settings are defined in `docs/production_deployment.md`. The final
+worker count awaits measured CPU/RAM and load-test data.
 
 ## Operational Verification
 
@@ -375,15 +368,15 @@ can currently be collected with `collectstatic` and served through the existing
 WhiteNoise configuration.
 
 Media files are different: homework and announcement attachments are user-uploaded
-content. Final production must store them in durable external object storage.
-WhiteNoise is not a storage or serving solution for user-uploaded media.
+content. In production they are stored in `MEDIA_ROOT` on the server, as described
+in `docs/production_deployment.md`. WhiteNoise is not a storage or serving solution
+for user-uploaded media.
 
 ## Deferred Infrastructure Decisions
 
-The exact production Python version will be pinned after the final hosting and
-runtime requirements are selected. A Dockerfile, Procfile, `render.yaml`, runtime
-pinning, worker count, object-storage provider settings, and provider-specific
-release commands also remain deferred until the paid hosting platform is selected.
+The final Gunicorn worker count awaits measured CPU/RAM and load-test data. Other
+deferred decisions and accepted risks are listed in section 17 of
+`docs/production_deployment.md`.
 
 ---
 

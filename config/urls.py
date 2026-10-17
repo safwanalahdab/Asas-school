@@ -28,7 +28,7 @@ from config.health import health_check
 
 urlpatterns = [
     path("health/", health_check, name="health-check"),
-    path("admin/", admin.site.urls),
+    path(settings.ADMIN_URL_PATH, admin.site.urls),
     path(
         "api/v1/auth/",
         include("accounts.auth_urls"),
