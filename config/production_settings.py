@@ -101,6 +101,17 @@ def is_local_hostname(hostname):
     return address.is_loopback or address.is_unspecified
 
 
+def is_loopback_hostname(hostname):
+    """Local hosts a browser can serve a frontend from (excludes 0.0.0.0)."""
+    if hostname in LOCAL_HOSTNAMES or hostname.endswith(".localhost"):
+        return True
+
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def is_valid_hostname(hostname):
     if not hostname or len(hostname) > 253:
         return False
@@ -108,10 +119,6 @@ def is_valid_hostname(hostname):
     return all(
         HOSTNAME_LABEL_PATTERN.match(label) for label in hostname.split(".")
     )
-
-
-def is_vercel_hostname(hostname):
-    return hostname == "vercel.app" or hostname.endswith(".vercel.app")
 
 
 def require_setting(name):
@@ -161,7 +168,10 @@ def read_production_hosts(name):
 
 
 def read_production_origins(name):
-    """Read exact HTTPS origins and reject development or wildcard values."""
+    """Read exact origins: HTTPS, or HTTP for loopback hosts only.
+
+    Wildcards stay rejected, so every origin is written out in full.
+    """
     raw_origins = env.list(name, default=[])
     if not any(origin.strip() for origin in raw_origins):
         raise ImproperlyConfigured(f"{name} is required in production.")
@@ -175,11 +185,6 @@ def read_production_origins(name):
             raise ImproperlyConfigured(f"{name} cannot contain wildcards.")
 
         parsed_origin = urlsplit(origin)
-        if parsed_origin.scheme != "https":
-            raise ImproperlyConfigured(
-                f"Invalid origin '{origin}' in {name}. "
-                "Production origins must use https://."
-            )
 
         try:
             port = parsed_origin.port
@@ -196,18 +201,31 @@ def read_production_origins(name):
         ):
             raise ImproperlyConfigured(f"Invalid origin '{origin}' in {name}.")
 
-        if is_local_hostname(hostname):
+        is_loopback = is_loopback_hostname(hostname)
+
+        # localhost مسموح للتجريب فقط؛ 0.0.0.0 ليس Origin يفتحه المتصفح.
+        if is_local_hostname(hostname) and not is_loopback:
             raise ImproperlyConfigured(
-                f"{name} cannot contain local origins in production."
+                f"{name} can contain only loopback local origins."
             )
 
-        if is_vercel_hostname(hostname):
+        if parsed_origin.scheme != "https" and not is_loopback:
             raise ImproperlyConfigured(
-                f"{name} cannot contain vercel.app origins in production. "
-                "Use the custom frontend domain."
+                f"Invalid origin '{origin}' in {name}. "
+                "Production origins must use https:// (http:// is allowed "
+                "for localhost only)."
             )
 
-        normalized_origin = f"https://{hostname}" + (f":{port}" if port else "")
+        # vercel.app لوحده Public Suffix وليس Origin لتطبيق.
+        if hostname == "vercel.app":
+            raise ImproperlyConfigured(
+                f"{name} must name the full vercel.app subdomain."
+            )
+
+        normalized_origin = (
+            f"{parsed_origin.scheme}://{hostname}"
+            + (f":{port}" if port else "")
+        )
         if normalized_origin not in origins:
             origins.append(normalized_origin)
 
@@ -411,15 +429,17 @@ JWT_COOKIE_HTTPONLY = True
 CSRF_COOKIE_HTTPONLY = True
 SESSION_COOKIE_HTTPONLY = True
 
-# Frontend وBackend تحت Root Domain واحد (app.example.com وapi.example.com)،
-# لذلك Lax هي القيمة الافتراضية في Production.
+# الـFrontend على https://assas-school.vercel.app والـBackend على دومين آخر.
+# vercel.app موجود في Public Suffix List، فهما موقعان مختلفان (cross-site)
+# بالنسبة للمتصفح، وCookies بـLax لا تُرسل مع طلبات fetch. لذلك None هي
+# القيمة الافتراضية في Production، وSecure مفروضة أعلاه.
 JWT_COOKIE_SAMESITE = read_samesite_setting(
     "JWT_COOKIE_SAMESITE",
-    default="Lax",
+    default="None",
 )
 CSRF_COOKIE_SAMESITE = read_samesite_setting(
     "CSRF_COOKIE_SAMESITE",
-    default="Lax",
+    default="None",
 )
 
 # Host-only للـBackend ما لم يُمرر Domain صريح وصالح.

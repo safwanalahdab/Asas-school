@@ -32,7 +32,7 @@ Supporting services:
   Requests never call Firebase: they store each notification as a pending
   row, and a separate `asas-push-worker` systemd service sends it (section 8).
   If the worker is not running, no push notification is delivered.
-- The frontend remains on Vercel under its real production domain.
+- The frontend is on Vercel at `https://assas-school.vercel.app`.
 
 `NUM_PROXIES=1` is correct only while Nginx is the sole proxy in front of
 Django. Adding Cloudflare, a load balancer, or another proxy requires a new
@@ -113,7 +113,7 @@ SECRET_KEY=<RANDOM_SECRET_AT_LEAST_50_CHARACTERS>
 JWT_SIGNING_KEY=<DIFFERENT_RANDOM_SECRET_AT_LEAST_32_CHARACTERS>
 
 ALLOWED_HOSTS=<BACKEND_DOMAIN>
-FRONTEND_ORIGINS=https://<FRONTEND_DOMAIN>
+FRONTEND_ORIGINS=https://assas-school.vercel.app
 BACKEND_ORIGINS=https://<BACKEND_DOMAIN>
 
 DB_NAME=<DATABASE_NAME>
@@ -128,8 +128,16 @@ MEDIA_ROOT=/var/www/asas/media
 
 Production rejects `DEBUG=True`; leave `DEBUG` unset or set it to `False`.
 Hosts must be plain hostnames. Origins must be exact HTTPS origins without a
-path, wildcard, query, fragment, localhost, or a `vercel.app` preview domain.
-Use the real Vercel production custom domain for `FRONTEND_ORIGINS`.
+path, wildcard, query, or fragment. A `vercel.app` origin is accepted only when
+written in full, such as `https://assas-school.vercel.app`; `https://*.vercel.app`
+and the bare `https://vercel.app` are rejected.
+
+`FRONTEND_ORIGINS` and `BACKEND_ORIGINS` also accept loopback origins
+(`localhost`, `*.localhost`, `127.x.x.x`) over `http://` or `https://`, such as
+`http://localhost:5173`. Use them only for temporary testing: any request from a
+localhost frontend works against the real production data. `http://` is never
+accepted for any other host, and `0.0.0.0` is rejected. `ALLOWED_HOSTS` and
+`JWT_COOKIE_DOMAIN` still reject localhost.
 
 Optional settings with current defaults:
 
@@ -137,8 +145,11 @@ Optional settings with current defaults:
 LOG_LEVEL=INFO
 MOBILE_MAX_ACTIVE_DEVICES_PER_GUARDIAN=2
 
-JWT_COOKIE_SAMESITE=Lax
-CSRF_COOKIE_SAMESITE=Lax
+# vercel.app is on the Public Suffix List, so the frontend and backend are
+# different sites to the browser; Lax cookies are not sent with its fetch
+# requests. Keep the default None (always Secure) unless that changes.
+JWT_COOKIE_SAMESITE=None
+CSRF_COOKIE_SAMESITE=None
 # JWT_COOKIE_DOMAIN=<PLAIN_COOKIE_DOMAIN_IF_EXPLICITLY_REQUIRED>
 
 SECURE_HSTS_SECONDS=0
@@ -653,8 +664,8 @@ the forwarding header as shown; it must not pass a client-provided value.
 Keep `SECURE_HSTS_SECONDS=0` until HTTPS, renewal, and every intended subdomain
 are stable. Increase it gradually. Enable subdomains and preload only after a
 separate irreversible-impact review. Keep `ALLOWED_HOSTS`, `BACKEND_ORIGINS`,
-`FRONTEND_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, and the real Vercel production
-origin aligned. Do not use broad wildcards.
+`FRONTEND_ORIGINS`, `CSRF_TRUSTED_ORIGINS`, and the Vercel frontend origin
+`https://assas-school.vercel.app` aligned. Do not use broad wildcards.
 
 ## 11. Firewall
 

@@ -303,8 +303,8 @@ class ProductionSettingsValidConfigurationTests(
         self.assertIs(self.settings["JWT_COOKIE_SECURE"], True)
         self.assertIs(self.settings["JWT_COOKIE_HTTPONLY"], True)
         self.assertIs(self.settings["CSRF_COOKIE_HTTPONLY"], True)
-        self.assertEqual(self.settings["JWT_COOKIE_SAMESITE"], "Lax")
-        self.assertEqual(self.settings["CSRF_COOKIE_SAMESITE"], "Lax")
+        self.assertEqual(self.settings["JWT_COOKIE_SAMESITE"], "None")
+        self.assertEqual(self.settings["CSRF_COOKIE_SAMESITE"], "None")
         self.assertIsNone(self.settings["JWT_COOKIE_DOMAIN"])
 
     def test_cookie_names_and_paths_are_unchanged(self):
@@ -469,31 +469,50 @@ class ProductionSettingsValidationTests(
             with self.subTest(value=value):
                 self.assert_rejected("FRONTEND_ORIGINS", FRONTEND_ORIGINS=value)
 
-    def test_localhost_origins_are_rejected(self):
+    def test_loopback_origins_are_accepted_with_their_scheme(self):
         for value in (
+            "http://localhost:5173",
+            "http://127.0.0.1:3000",
             "https://localhost",
-            "https://127.0.0.1",
-            "https://localhost:5173",
         ):
+            with self.subTest(value=value):
+                settings = self.assert_loads(FRONTEND_ORIGINS=value)
+                self.assertEqual(settings["CORS_ALLOWED_ORIGINS"], [value])
+                self.assertEqual(
+                    settings["CSRF_TRUSTED_ORIGINS"],
+                    [value, "https://api.example.com"],
+                )
+
+    def test_unspecified_address_origin_is_rejected(self):
+        for value in ("http://0.0.0.0:3000", "https://0.0.0.0"):
             with self.subTest(value=value):
                 self.assert_rejected("FRONTEND_ORIGINS", FRONTEND_ORIGINS=value)
 
     def test_http_origins_are_rejected(self):
-        self.assert_rejected(
-            "FRONTEND_ORIGINS",
-            FRONTEND_ORIGINS="http://app.example.com",
-        )
+        for value in ("http://app.example.com", "http://example.com"):
+            with self.subTest(value=value):
+                self.assert_rejected("FRONTEND_ORIGINS", FRONTEND_ORIGINS=value)
         self.assert_rejected(
             "BACKEND_ORIGINS",
             BACKEND_ORIGINS="http://api.example.com",
         )
 
-    def test_vercel_origins_are_rejected(self):
-        for value in (
-            "https://*.vercel.app",
-            "https://asas-git-preview-team.vercel.app",
-            "https://vercel.app",
-        ):
+    def test_full_vercel_origin_is_accepted(self):
+        settings = self.assert_loads(
+            FRONTEND_ORIGINS="https://assas-school.vercel.app",
+        )
+        self.assertEqual(
+            settings["CORS_ALLOWED_ORIGINS"],
+            ["https://assas-school.vercel.app"],
+        )
+        self.assertEqual(settings["CORS_ALLOWED_ORIGIN_REGEXES"], [])
+        self.assertEqual(
+            settings["CSRF_TRUSTED_ORIGINS"],
+            ["https://assas-school.vercel.app", "https://api.example.com"],
+        )
+
+    def test_vercel_wildcard_and_bare_domain_are_rejected(self):
+        for value in ("https://*.vercel.app", "https://vercel.app"):
             with self.subTest(value=value):
                 self.assert_rejected("FRONTEND_ORIGINS", FRONTEND_ORIGINS=value)
 
@@ -509,7 +528,7 @@ class ProductionSettingsValidationTests(
     def test_backend_origins_use_same_rules(self):
         for value in (
             "https://*.example.com",
-            "https://localhost",
+            "http://api.example.com",
             "https://api.example.com/api",
         ):
             with self.subTest(value=value):
@@ -611,6 +630,14 @@ class ProductionSettingsValidationTests(
         self.assertIs(settings["CSRF_COOKIE_SECURE"], True)
 
         self.assert_rejected("JWT_COOKIE_SAMESITE", JWT_COOKIE_SAMESITE="Loose")
+
+    def test_explicit_lax_samesite_is_respected(self):
+        settings = self.assert_loads(
+            JWT_COOKIE_SAMESITE="Lax",
+            CSRF_COOKIE_SAMESITE="Lax",
+        )
+        self.assertEqual(settings["JWT_COOKIE_SAMESITE"], "Lax")
+        self.assertEqual(settings["CSRF_COOKIE_SAMESITE"], "Lax")
 
     def test_samesite_none_with_insecure_cookie_is_rejected(self):
         self.assert_rejected(
