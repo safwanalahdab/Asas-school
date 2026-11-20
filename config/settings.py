@@ -208,6 +208,7 @@ INSTALLED_APPS = [
     "dashboard",
     "grades",
     "notifications",
+    "app_updates",
 
 ]
 

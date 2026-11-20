@@ -102,6 +102,11 @@ urlpatterns += [
         include("grades.urls"),
     ),
     path("api/v1/", include("audit_logs.urls")),
+    # مسار عام قبل تسجيل الدخول؛ يسبق include الموبايل العام.
+    path(
+        "api/v1/mobile/app-update/",
+        include("app_updates.urls"),
+    ),
     path(
         "api/v1/mobile/",
         include("students.mobile_urls"),
